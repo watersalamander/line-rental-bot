@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Add Lease</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root { --bg:#f7f8fa; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e5e7eb; --brand:#06c755; --danger:#d92d20; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+    .wrap { max-width: 520px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 20px; margin: 8px 0 16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+    label { display:block; font-size:13px; font-weight:600; margin:12px 0 6px; }
+    .req::after { content:" *"; color:var(--danger); }
+    input, select { width:100%; padding:11px 12px; font-size:16px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--ink); }
+    .row { display:flex; gap:10px; }
+    .row > div { flex:1; }
+    .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+    .toggle { display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    .toggle button { flex:1; padding:11px; font-size:14px; border:0; background:#fff; color:var(--ink); }
+    .toggle button.on { background:var(--brand); color:#fff; font-weight:600; }
+    button.primary { width:100%; padding:14px; font-size:16px; font-weight:700; color:#fff; background:var(--brand); border:0; border-radius:12px; margin-top:8px; }
+    button.primary:disabled { opacity:.5; }
+    .msg { padding:12px; border-radius:10px; font-size:14px; margin-bottom:12px; display:none; }
+    .msg.err { background:#fef3f2; color:var(--danger); border:1px solid #fecdca; display:block; }
+    .msg.ok  { background:#ecfdf3; color:#027a48; border:1px solid #a6f4c5; display:block; }
+    .hidden { display:none; }
+    .status { text-align:center; color:var(--muted); padding:40px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="boot" class="status">Loading…</div>
+
+    <div id="app" class="hidden">
+      <h1>➕ Add lease</h1>
+      <div id="msg" class="msg"></div>
+
+      <form id="form">
+        <div class="card">
+          <label class="req">Property / Unit</label>
+          <select id="propertySelect">
+            <option value="__new__">➕ New property…</option>
+          </select>
+          <div id="newProperty">
+            <div class="row">
+              <div>
+                <label class="req">Building</label>
+                <input id="building" placeholder="e.g. Ideo Sukhumvit" />
+              </div>
+              <div>
+                <label class="req">Unit no.</label>
+                <input id="unitNo" placeholder="e.g. 2508" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <label class="req">Tenant name</label>
+          <input id="tenantName" placeholder="Display / tracking name" />
+
+          <label class="req">Monthly rent (THB)</label>
+          <input id="rentAmount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="15000" />
+
+          <label class="req">Billing type</label>
+          <div class="toggle" id="billingToggle">
+            <button type="button" data-val="fixed" class="on">Fixed rent</button>
+            <button type="button" data-val="rent_plus_utilities">Rent + utilities</button>
+          </div>
+          <div class="hint">“Rent + utilities” stops overpayments being flagged as errors.</div>
+
+          <label>Deposit (THB)</label>
+          <input id="depositAmount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Optional" />
+        </div>
+
+        <div class="card">
+          <label class="req">Due day of month</label>
+          <input id="dueDay" type="number" min="1" max="28" step="1" placeholder="1–28" />
+
+          <div class="row">
+            <div>
+              <label class="req">Lease start</label>
+              <input id="startDate" type="date" />
+            </div>
+            <div>
+              <label class="req">Lease end</label>
+              <input id="endDate" type="date" />
+            </div>
+          </div>
+
+          <label>First-invoice amount override (THB)</label>
+          <input id="firstInvoiceOverride" type="number" inputmode="decimal" min="1" step="0.01" placeholder="Blank = full rent (for prorated move-in)" />
+
+          <label>Expected payer name</label>
+          <input id="expectedPayerName" placeholder="Name on tenant’s bank account (optional)" />
+          <div class="hint">Helps catch wrong or borrowed slips later.</div>
+        </div>
+
+        <button type="submit" class="primary" id="submitBtn">Create lease</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    let idToken = null;
+    let billingType = 'fixed';
+
+    const $ = (id) => document.getElementById(id);
+    function showMsg(kind, text) {
+      const el = $('msg');
+      el.className = 'msg ' + kind;
+      el.textContent = text;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    async function boot() {
+      try {
+        const cfg = await fetch('/api/config').then((r) => r.json());
+        if (!cfg.liffId) throw new Error('Server missing LIFF_ID');
+        await liff.init({ liffId: cfg.liffId });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+        idToken = liff.getIDToken();
+        if (!idToken) throw new Error('No ID token — check the LIFF scope includes “openid”.');
+        await loadProperties();
+        $('boot').classList.add('hidden');
+        $('app').classList.remove('hidden');
+      } catch (e) {
+        $('boot').textContent = 'Setup error: ' + (e && e.message ? e.message : e);
+      }
+    }
+
+    async function loadProperties() {
+      const res = await fetch('/api/properties', { headers: { Authorization: 'Bearer ' + idToken } });
+      if (!res.ok) throw new Error('Could not load properties (' + res.status + ')');
+      const { properties } = await res.json();
+      const sel = $('propertySelect');
+      for (const p of properties) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'Unit';
+        sel.insertBefore(opt, sel.firstChild);
+      }
+      sel.value = properties.length ? properties[0].id : '__new__';
+      toggleNewProperty();
+    }
+
+    function toggleNewProperty() {
+      const isNew = $('propertySelect').value === '__new__';
+      $('newProperty').style.display = isNew ? 'block' : 'none';
+    }
+
+    $('propertySelect').addEventListener('change', toggleNewProperty);
+
+    $('billingToggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-val]');
+      if (!btn) return;
+      billingType = btn.dataset.val;
+      for (const b of $('billingToggle').children) b.classList.toggle('on', b === btn);
+    });
+
+    function numOrNull(id) {
+      const v = $(id).value.trim();
+      return v === '' ? null : Number(v);
+    }
+
+    $('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const isNew = $('propertySelect').value === '__new__';
+      const body = {
+        tenantName: $('tenantName').value.trim(),
+        rentAmount: Number($('rentAmount').value),
+        billingType,
+        depositAmount: numOrNull('depositAmount'),
+        dueDay: Number($('dueDay').value),
+        startDate: $('startDate').value,
+        endDate: $('endDate').value,
+        firstInvoiceOverride: numOrNull('firstInvoiceOverride'),
+        expectedPayerName: $('expectedPayerName').value.trim() || null,
+      };
+      if (isNew) {
+        body.building = $('building').value.trim();
+        body.unitNo = $('unitNo').value.trim();
+      } else {
+        body.propertyId = $('propertySelect').value;
+      }
+
+      $('submitBtn').disabled = true;
+      try {
+        const res = await fetch('/api/leases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + idToken },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ('Error ' + res.status));
+
+        const unit = [data.property.building, data.property.unit_no].filter(Boolean).join(' ') || 'unit';
+        const rent = Number(data.lease.rent_amount).toLocaleString();
+        showMsg('ok', `Lease created — ${unit}, ฿${rent}/mo, due day ${data.lease.due_day}. First invoice for ${data.invoice.period_month} created. Now run /setup in the tenant’s group to link it.`);
+        $('form').reset();
+        billingType = 'fixed';
+      } catch (err) {
+        showMsg('err', err.message || 'Something went wrong');
+      } finally {
+        $('submitBtn').disabled = false;
+      }
+    });
+
+    boot();
+  </script>
+</body>
+</html>

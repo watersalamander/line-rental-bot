@@ -1,0 +1,23 @@
+# Keep the build context small and secret-free.
+node_modules
+dist
+npm-debug.log
+*.log
+server.out
+prodtest.out
+
+# Never ship env files into the image — Railway injects env vars directly.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+README.md
+DEPLOY.md
+supabase/.branches
+supabase/.temp

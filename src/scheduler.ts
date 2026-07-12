@@ -1,5 +1,6 @@
 import { db } from './db/client';
 import { pushText } from './line/client';
+import { notifyError } from './services/alerts';
 import { jobRunsTableExists, claimJobKey } from './services/jobs';
 import { sendReminderDigests } from './services/reminders';
 import {
@@ -106,6 +107,7 @@ async function tick(): Promise<void> {
       console.log(`[cron] ${job.name} ok (${today})`);
     } catch (err) {
       console.error(`[cron] ${job.name} failed — will retry next tick`, err);
+      void notifyError(`cron:${job.name}`, err);
     }
   }
   // keep the set from growing forever

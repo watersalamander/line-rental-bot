@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { validateSignature, type WebhookRequestBody } from '@line/bot-sdk';
 import { config } from '../config';
 import { handleEvent } from '../line/handleEvent';
+import { notifyError } from '../services/alerts';
 
 // Fastify request augmented with the raw JSON string captured by the content-type parser.
 type RawBodyRequest = FastifyRequest & { rawBody?: string };
@@ -29,6 +30,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     for (const event of body.events ?? []) {
       handleEvent(event).catch((err) => {
         console.error('[webhook] handler error:', err);
+        void notifyError('webhook', err);
       });
     }
   });

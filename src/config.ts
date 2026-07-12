@@ -24,6 +24,10 @@ const schema = z.object({
   LINE_LOGIN_CHANNEL_ID: z.string().optional(),
   LIFF_ID: z.string().optional(),
 
+  // Ops alerting: LINE userId that receives error alerts (the operator's own
+  // id). Unset → errors are only logged, never pushed.
+  ADMIN_LINE_USER_ID: z.string().optional(),
+
   // Phase 2 (slip reading). 'claude' = Claude Vision (default, pay-per-use, no
   // bank verification); 'easyslip' = EasySlip bank verification.
   SLIP_VENDOR: z.enum(['claude', 'easyslip']).default('claude'),

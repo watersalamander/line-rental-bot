@@ -4,7 +4,7 @@ import type { BillingType, Invoice, Landlord, Lease, Property } from '../db/type
 /** Thrown when a group is already bound to another active lease (unique index 23505). */
 export class GroupAlreadyBoundError extends Error {
   constructor() {
-    super('This group is already linked to another unit.');
+    super('กลุ่มนี้เชื่อมกับห้องอื่นอยู่แล้วครับ');
     this.name = 'GroupAlreadyBoundError';
   }
 }
@@ -63,12 +63,12 @@ export async function createLease(input: CreateLeaseInput): Promise<CreateLeaseR
       .eq('landlord_id', input.landlordId)
       .maybeSingle();
     if (error) throw new Error(`createLease/property: ${error.message}`);
-    if (!data) throw new Error('Property not found or not yours.');
+    if (!data) throw new Error('ไม่พบห้องนี้ หรือไม่ใช่ห้องของคุณครับ');
     property = data as Property;
   } else {
     const building = input.building?.trim();
     const unitNo = input.unitNo?.trim();
-    if (!building || !unitNo) throw new Error('New property requires building and unit number.');
+    if (!building || !unitNo) throw new Error('การเพิ่มห้องใหม่ต้องระบุชื่ออาคารและเลขห้องครับ');
     const { data, error } = await db
       .from('properties')
       .insert({ landlord_id: input.landlordId, building, unit_no: unitNo, name: `${building} ${unitNo}` })
@@ -172,6 +172,6 @@ export async function bindGroupToLease(
     if (error.code === '23505') throw new GroupAlreadyBoundError();
     throw new Error(`bindGroupToLease: ${error.message}`);
   }
-  if (!data) throw new Error('That unit was not found among your active leases.');
+  if (!data) throw new Error('ไม่พบห้องนี้ในสัญญาเช่าที่ใช้งานอยู่ของคุณครับ');
   return data as Lease & { property: Property };
 }

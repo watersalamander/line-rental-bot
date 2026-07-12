@@ -15,7 +15,7 @@ interface LineVerifyResponse {
  */
 export async function verifyIdToken(idToken: string): Promise<{ userId: string; name: string | null }> {
   if (!config.LINE_LOGIN_CHANNEL_ID) {
-    throw new Error('LINE_LOGIN_CHANNEL_ID is not configured — register the LIFF/Login channel first.');
+    throw new Error('ยังไม่ได้ตั้งค่า LINE_LOGIN_CHANNEL_ID — กรุณาลงทะเบียน LIFF/Login channel ก่อนครับ');
   }
 
   const res = await fetch('https://api.line.me/oauth2/v2.1/verify', {
@@ -26,7 +26,7 @@ export async function verifyIdToken(idToken: string): Promise<{ userId: string; 
 
   if (!res.ok) {
     const detail = await res.text();
-    throw new Error(`LIFF token verification failed (${res.status}): ${detail}`);
+    throw new Error(`ยืนยัน LIFF token ไม่สำเร็จ (${res.status}): ${detail}`);
   }
 
   const data = (await res.json()) as LineVerifyResponse;

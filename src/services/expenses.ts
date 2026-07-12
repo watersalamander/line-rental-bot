@@ -36,7 +36,7 @@ export function inferCategory(note: string): ExpenseCategory | null {
 /** Thrown when the slip's bank_txn_ref was already recorded for this landlord (unique index 23505). */
 export class DuplicateExpenseError extends Error {
   constructor() {
-    super('This slip was already recorded.');
+    super('สลิปนี้เคยบันทึกไปแล้วครับ');
     this.name = 'DuplicateExpenseError';
   }
 }
@@ -102,7 +102,7 @@ export async function setExpenseProperty(
       .eq('landlord_id', landlordId)
       .maybeSingle();
     if (error) throw new Error(`setExpenseProperty/check: ${error.message}`);
-    if (!prop) throw new Error('Property not found or not yours.');
+    if (!prop) throw new Error('ไม่พบห้องนี้ หรือไม่ใช่ห้องของคุณครับ');
   }
   return updateExpense(txnId, landlordId, { property_id: propertyId });
 }
@@ -129,7 +129,7 @@ async function updateExpense(
     .select('id, amount, category, property_id, property:properties(*)')
     .maybeSingle();
   if (error) throw new Error(`updateExpense: ${error.message}`);
-  if (!data) throw new Error('Expense not found.');
+  if (!data) throw new Error('ไม่พบรายการรายจ่ายครับ');
   const row = data as unknown as ExpenseRow;
   return { ...row, amount: Number(row.amount) };
 }

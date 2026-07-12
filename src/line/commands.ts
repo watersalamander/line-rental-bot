@@ -41,17 +41,17 @@ export async function handleCommand(event: MessageEvent, text: string): Promise<
     case 'help':
       return replyText(
         event.replyToken,
-        'Commands:\n' +
-          '/setup — link this group to one of your units\n' +
-          '/status — current period, all units (1:1 chat only)\n' +
-          '/summary — last month rollup (1:1 chat only)\n' +
-          '/remind — send rent reminders to groups with unpaid, due rent (1:1 chat only)\n' +
-          '/dashboard — open the web dashboard\n\n' +
-          'Expenses (1:1 chat only): send a payment-slip photo, ' +
-          'or type an amount like "500 ค่าส่วนกลาง"',
+        'คำสั่งที่ใช้ได้:\n' +
+          '/setup — เชื่อมกลุ่มนี้กับห้องของคุณ\n' +
+          '/status — สถานะงวดปัจจุบันของทุกห้อง (แชทส่วนตัวเท่านั้น)\n' +
+          '/summary — สรุปยอดเดือนที่แล้ว (แชทส่วนตัวเท่านั้น)\n' +
+          '/remind — ส่งแจ้งเตือนค่าเช่าไปยังกลุ่มที่ค้างชำระและถึงกำหนด (แชทส่วนตัวเท่านั้น)\n' +
+          '/dashboard — เปิดแดชบอร์ดบนเว็บ\n\n' +
+          'บันทึกรายจ่าย (แชทส่วนตัวเท่านั้น): ส่งรูปสลิปการชำระเงิน ' +
+          'หรือพิมพ์จำนวนเงิน เช่น "500 ค่าส่วนกลาง"',
       );
     default:
-      return replyText(event.replyToken, `Unknown command: /${command}`);
+      return replyText(event.replyToken, `ไม่รู้จักคำสั่ง: /${command}`);
   }
 }
 
@@ -125,8 +125,8 @@ async function handleRemind(event: MessageEvent): Promise<void> {
 async function handleDashboard(event: MessageEvent): Promise<void> {
   const replyToken = event.replyToken;
   if (replyToken === undefined) return;
-  if (!config.LIFF_ID) return replyText(replyToken, 'Dashboard is not configured yet (missing LIFF_ID).');
-  return replyText(replyToken, `📈 Dashboard:\nhttps://liff.line.me/${config.LIFF_ID}/dashboard/`);
+  if (!config.LIFF_ID) return replyText(replyToken, 'ยังไม่ได้ตั้งค่าแดชบอร์ด (ไม่พบ LIFF_ID) ครับ');
+  return replyText(replyToken, `📈 แดชบอร์ด:\nhttps://liff.line.me/${config.LIFF_ID}/dashboard/`);
 }
 
 async function handleSetup(event: MessageEvent): Promise<void> {
@@ -134,21 +134,21 @@ async function handleSetup(event: MessageEvent): Promise<void> {
   if (replyToken === undefined) return;
 
   if (event.source.type !== 'group') {
-    return replyText(replyToken, 'Run /setup inside the tenant’s group chat to link it to a unit.');
+    return replyText(replyToken, 'พิมพ์ /setup ในกลุ่มแชทของผู้เช่า เพื่อเชื่อมกลุ่มกับห้องครับ');
   }
   const userId = event.source.userId;
   if (!userId) {
-    return replyText(replyToken, 'I can’t identify you here. Add the bot as a friend, then try /setup again.');
+    return replyText(replyToken, 'ไม่สามารถระบุตัวตนของคุณได้ กรุณาเพิ่มบอทเป็นเพื่อนก่อน แล้วพิมพ์ /setup อีกครั้งครับ');
   }
 
   const landlord = await getLandlordByLineUserId(userId);
   if (!landlord) {
-    return replyText(replyToken, 'Open the app and add a lease first, then run /setup to link this group.');
+    return replyText(replyToken, 'กรุณาเปิดแอปแล้วเพิ่มสัญญาเช่าก่อน จากนั้นพิมพ์ /setup เพื่อเชื่อมกลุ่มนี้ครับ');
   }
 
   const leases = await listUnboundActiveLeases(landlord.id);
   if (leases.length === 0) {
-    return replyText(replyToken, 'No unlinked units found. Add a lease in the app first (or all your units are already linked).');
+    return replyText(replyToken, 'ไม่พบห้องที่ยังไม่ได้เชื่อม กรุณาเพิ่มสัญญาเช่าในแอปก่อน (หรือทุกห้องของคุณเชื่อมครบแล้ว) ครับ');
   }
 
   const items: messagingApi.QuickReplyItem[] = leases.slice(0, 13).map((lease) => ({
@@ -157,12 +157,12 @@ async function handleSetup(event: MessageEvent): Promise<void> {
       type: 'postback',
       label: unitLabel(lease),
       data: `${BIND_PREFIX}${lease.id}`,
-      displayText: `Link this group to ${unitLabel(lease)}`,
+      displayText: `เชื่อมกลุ่มนี้กับ ${unitLabel(lease)}`,
     },
   }));
 
   await replyMessages(replyToken, [
-    { type: 'text', text: 'Which unit is this group? Tap one:', quickReply: { items } },
+    { type: 'text', text: 'กลุ่มนี้คือห้องไหนครับ? แตะเลือกหนึ่งห้อง:', quickReply: { items } },
   ]);
 }
 
@@ -175,13 +175,13 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
 
   const leaseId = data.slice(BIND_PREFIX.length);
   if (event.source.type !== 'group') {
-    return replyText(replyToken, 'Linking only works inside a group chat.');
+    return replyText(replyToken, 'การเชื่อมกลุ่มทำได้ในกลุ่มแชทเท่านั้นครับ');
   }
   const userId = event.source.userId;
-  if (!userId) return replyText(replyToken, 'I can’t identify you here.');
+  if (!userId) return replyText(replyToken, 'ไม่สามารถระบุตัวตนของคุณได้ครับ');
 
   const landlord = await getLandlordByLineUserId(userId);
-  if (!landlord) return replyText(replyToken, 'Only the unit owner can link this group.');
+  if (!landlord) return replyText(replyToken, 'เฉพาะเจ้าของห้องเท่านั้นที่เชื่อมกลุ่มนี้ได้ครับ');
 
   try {
     const lease = await bindGroupToLease(leaseId, event.source.groupId, landlord.id);
@@ -189,12 +189,12 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
     const unit = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || lease.tenant_name;
     await replyText(
       replyToken,
-      `✓ Linked — this group is now ${unit} (tenant: ${lease.tenant_name}).\nSlips posted here will be matched to this unit’s invoices.`,
+      `✓ เชื่อมสำเร็จ — กลุ่มนี้คือ ${unit} (ผู้เช่า: ${lease.tenant_name}) แล้วครับ\nสลิปที่ส่งในกลุ่มนี้จะถูกจับคู่กับบิลของห้องนี้`,
     );
   } catch (err) {
     if (err instanceof GroupAlreadyBoundError) {
-      return replyText(replyToken, 'This group is already linked to another unit.');
+      return replyText(replyToken, 'กลุ่มนี้เชื่อมกับห้องอื่นอยู่แล้วครับ');
     }
-    return replyText(replyToken, err instanceof Error ? err.message : 'Could not link this group.');
+    return replyText(replyToken, err instanceof Error ? err.message : 'เชื่อมกลุ่มนี้ไม่สำเร็จครับ');
   }
 }

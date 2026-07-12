@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="th">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Dashboard</title>
+  <title>แดชบอร์ด</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root { --bg:#f7f8fa; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e5e7eb; --brand:#06c755; --danger:#d92d20; --warn:#b54708; --info:#175cd3; }
@@ -62,10 +62,10 @@
 </head>
 <body>
   <div class="wrap">
-    <div id="boot" class="status">Loading…</div>
+    <div id="boot" class="status">กำลังโหลด…</div>
 
     <div id="app" class="hidden">
-      <h1>📈 Dashboard</h1>
+      <h1>📈 แดชบอร์ด</h1>
 
       <div class="nav">
         <button id="prevBtn" type="button">‹</button>
@@ -75,13 +75,13 @@
 
       <div class="tiles" id="tiles"></div>
 
-      <h2>Units — reconciliation</h2>
+      <h2>ห้อง — การกระทบยอด</h2>
       <div id="units"></div>
 
-      <h2>Cashflow (last 6 months)</h2>
+      <h2>กระแสเงินสด (6 เดือนล่าสุด)</h2>
       <div class="card" id="cashflow"></div>
 
-      <h2>Lease expiries (next 90 days)</h2>
+      <h2>สัญญาใกล้หมดอายุ (90 วันข้างหน้า)</h2>
       <div class="card" id="expiries"></div>
     </div>
   </div>
@@ -95,7 +95,7 @@
     const baht = (n) => '฿' + Number(n).toLocaleString('en-US');
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
-    const STATUS_LABEL = { paid:'Paid', partial:'Partial', missing:'Unpaid', overpaid:'Overpaid' };
+    const STATUS_LABEL = { paid:'ชำระครบ', partial:'ชำระบางส่วน', missing:'ยังไม่ชำระ', overpaid:'ชำระเกิน' };
 
     function shiftPeriod(p, delta) {
       const [y, m] = p.split('-').map(Number);
@@ -106,23 +106,23 @@
     async function boot() {
       try {
         const cfg = await fetch('/api/config').then((r) => r.json());
-        if (!cfg.liffId) throw new Error('Server missing LIFF_ID');
+        if (!cfg.liffId) throw new Error('เซิร์ฟเวอร์ไม่พบ LIFF_ID');
         await liff.init({ liffId: cfg.liffId });
         if (!liff.isLoggedIn()) { liff.login(); return; }
         idToken = liff.getIDToken();
-        if (!idToken) throw new Error('No ID token — check the LIFF scope includes “openid”.');
+        if (!idToken) throw new Error('ไม่พบ ID token — ตรวจสอบว่า LIFF scope มี “openid” หรือไม่');
         await load(null);
         $('boot').classList.add('hidden');
         $('app').classList.remove('hidden');
       } catch (e) {
-        $('boot').textContent = 'Setup error: ' + (e && e.message ? e.message : e);
+        $('boot').textContent = 'ตั้งค่าผิดพลาด: ' + (e && e.message ? e.message : e);
       }
     }
 
     async function load(p) {
       const url = '/api/dashboard' + (p ? '?period=' + encodeURIComponent(p) : '');
       const res = await fetch(url, { headers: { Authorization: 'Bearer ' + idToken } });
-      if (!res.ok) throw new Error('Could not load dashboard (' + res.status + ')');
+      if (!res.ok) throw new Error('โหลดแดชบอร์ดไม่สำเร็จ (' + res.status + ')');
       const data = await res.json();
       period = data.period;
       nowPeriod = data.currentPeriod;
@@ -135,21 +135,21 @@
 
       const t = d.totals;
       $('tiles').innerHTML = [
-        ['Billed', baht(t.due)],
-        ['Received (rent)', baht(t.paid)],
-        ['Outstanding', baht(t.remaining + t.arrears)],
-        ['Income (all)', baht(t.income)],
+        ['ยอดเรียกเก็บ', baht(t.due)],
+        ['รับแล้ว (ค่าเช่า)', baht(t.paid)],
+        ['ค้างชำระ', baht(t.remaining + t.arrears)],
+        ['รายรับ (ทั้งหมด)', baht(t.income)],
       ].map(([k, v]) => '<div class="tile"><div class="k">' + k + '</div><div class="v">' + v + '</div></div>').join('');
 
       // unit grid
       if (!d.units.length) {
-        $('units').innerHTML = '<div class="card empty">No units billing in this period. Add a lease first.</div>';
+        $('units').innerHTML = '<div class="card empty">ไม่มีห้องที่เปิดบิลในงวดนี้ กรุณาเพิ่มสัญญาเช่าก่อน</div>';
       } else {
         $('units').innerHTML = d.units.map((u) => {
           const chips = ['<span class="chip ' + u.status + '">' + STATUS_LABEL[u.status] + '</span>'];
-          if (u.late) chips.push('<span class="chip late">Late — due ' + esc(u.dueDate) + '</span>');
-          if (u.arrears > 0) chips.push('<span class="chip arrears">Arrears ' + baht(u.arrears) + '</span>');
-          const sub = u.remaining > 0 ? 'remaining ' + baht(u.remaining) : 'income ' + baht(u.income);
+          if (u.late) chips.push('<span class="chip late">เลยกำหนด — ครบกำหนด ' + esc(u.dueDate) + '</span>');
+          if (u.arrears > 0) chips.push('<span class="chip arrears">ค้างสะสม ' + baht(u.arrears) + '</span>');
+          const sub = u.remaining > 0 ? 'ค้าง ' + baht(u.remaining) : 'รายรับ ' + baht(u.income);
           return '<div class="card">' +
             '<div class="unit">' +
               '<div><div class="name">' + esc(u.unit) + '</div><div class="tenant">' + esc(u.tenant) + '</div></div>' +
@@ -167,17 +167,17 @@
         '<div class="bar"><div class="in" style="width:' + (m.income / max * 100) + '%"></div>' +
         '<div class="out" style="width:' + (m.expense / max * 100) + '%"></div></div>' +
         '<div class="amt">' + baht(m.net) + '</div></div>'
-      ).join('') || '<div class="empty">No transactions yet.</div>';
+      ).join('') || '<div class="empty">ยังไม่มีรายการเดินบัญชี</div>';
 
       // expiries
       $('expiries').innerHTML = d.expiries.length
         ? d.expiries.map((e) => {
             const cls = e.daysLeft < 0 ? 'over' : e.daysLeft <= 30 ? 'soon' : '';
-            const label = e.daysLeft < 0 ? 'ended ' + Math.abs(e.daysLeft) + 'd ago' : e.daysLeft + 'd left';
+            const label = e.daysLeft < 0 ? 'หมดอายุแล้ว ' + Math.abs(e.daysLeft) + ' วัน' : 'เหลืออีก ' + e.daysLeft + ' วัน';
             return '<div class="exp"><div>' + esc(e.unit) + ' — ' + esc(e.tenant) + '<br><span class="empty">' + esc(e.endDate) + '</span></div>' +
               '<div class="d ' + cls + '">' + label + '</div></div>';
           }).join('')
-        : '<div class="empty">No leases ending in the next 90 days.</div>';
+        : '<div class="empty">ไม่มีสัญญาที่จะหมดอายุใน 90 วันข้างหน้า</div>';
     }
 
     $('prevBtn').addEventListener('click', () => load(shiftPeriod(period, -1)).catch(showErr));

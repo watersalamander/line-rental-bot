@@ -20,14 +20,14 @@ class AuthError extends Error {}
 async function authLandlord(request: FastifyRequest): Promise<{ landlordId: string }> {
   const header = request.headers['authorization'];
   if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
-    throw new AuthError('Missing bearer token');
+    throw new AuthError('ไม่พบ token สำหรับยืนยันตัวตน');
   }
   const idToken = header.slice('Bearer '.length).trim();
   let verified;
   try {
     verified = await verifyIdToken(idToken);
   } catch (err) {
-    throw new AuthError(err instanceof Error ? err.message : 'Token verification failed');
+    throw new AuthError(err instanceof Error ? err.message : 'ยืนยัน token ไม่สำเร็จ');
   }
   const landlord = await upsertLandlord(verified.userId, verified.name);
   return { landlordId: landlord.id };
@@ -43,20 +43,20 @@ const leaseBodySchema = z
     billingType: z.enum(['fixed', 'rent_plus_utilities']),
     depositAmount: z.number().nonnegative().nullish(),
     dueDay: z.number().int().min(1).max(28),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'startDate must be YYYY-MM-DD'),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'endDate must be YYYY-MM-DD'),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่เริ่มต้องเป็นรูปแบบ YYYY-MM-DD'),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'วันที่สิ้นสุดต้องเป็นรูปแบบ YYYY-MM-DD'),
     firstInvoiceOverride: z.number().positive().nullish(),
     expectedPayerName: z.string().trim().max(120).nullish(),
   })
   .refine((d) => d.propertyId !== undefined || (d.building !== undefined && d.unitNo !== undefined), {
-    message: 'Select an existing property or provide both building and unit number.',
+    message: 'เลือกห้องที่มีอยู่ หรือระบุทั้งชื่ออาคารและเลขห้องครับ',
   })
-  .refine((d) => d.endDate > d.startDate, { message: 'End date must be after start date.' });
+  .refine((d) => d.endDate > d.startDate, { message: 'วันที่สิ้นสุดต้องอยู่หลังวันที่เริ่มครับ' });
 
 export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // Public config for the LIFF frontend to initialise itself.
   app.get('/api/config', async (_req, reply: FastifyReply) => {
-    if (!config.LIFF_ID) return reply.code(503).send({ error: 'LIFF_ID not configured' });
+    if (!config.LIFF_ID) return reply.code(503).send({ error: 'ยังไม่ได้ตั้งค่า LIFF_ID' });
     return { liffId: config.LIFF_ID };
   });
 
@@ -65,7 +65,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     try {
       ({ landlordId } = await authLandlord(request));
     } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : 'Unauthorized' });
+      return reply.code(401).send({ error: err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต' });
     }
     return { properties: await listProperties(landlordId) };
   });
@@ -76,7 +76,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     try {
       ({ landlordId } = await authLandlord(request));
     } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : 'Unauthorized' });
+      return reply.code(401).send({ error: err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต' });
     }
 
     const q = request.query as { period?: string };
@@ -96,7 +96,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     try {
       ({ landlordId } = await authLandlord(request));
     } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : 'Unauthorized' });
+      return reply.code(401).send({ error: err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต' });
     }
 
     const parsed = leaseBodySchema.safeParse(request.body);
@@ -108,7 +108,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       const result = await createLease({ landlordId, ...parsed.data });
       return reply.code(201).send(result);
     } catch (err) {
-      return reply.code(400).send({ error: err instanceof Error ? err.message : 'Failed to create lease' });
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'สร้างสัญญาเช่าไม่สำเร็จ' });
     }
   });
 }

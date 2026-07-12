@@ -32,7 +32,7 @@ const baht = (n: number) => `฿${Number(n).toLocaleString('en-US')}`;
 const quickLabel = (s: string) => (s.length > 20 ? `${s.slice(0, 19)}…` : s); // LINE cap
 
 function propertyLabel(p: Property): string {
-  return [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'Unit';
+  return [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'ห้อง';
 }
 
 // Typed expense: "<amount> [note]", e.g. "500 ค่าส่วนกลาง" / "1,250.50 ซ่อมแอร์".

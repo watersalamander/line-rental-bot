@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="th">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Add Lease</title>
+  <title>เพิ่มสัญญาเช่า</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root { --bg:#f7f8fa; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e5e7eb; --brand:#06c755; --danger:#d92d20; }
@@ -32,74 +32,74 @@
 </head>
 <body>
   <div class="wrap">
-    <div id="boot" class="status">Loading…</div>
+    <div id="boot" class="status">กำลังโหลด…</div>
 
     <div id="app" class="hidden">
-      <h1>➕ Add lease</h1>
+      <h1>➕ เพิ่มสัญญาเช่า</h1>
       <div id="msg" class="msg"></div>
 
       <form id="form">
         <div class="card">
-          <label class="req">Property / Unit</label>
+          <label class="req">ทรัพย์สิน / ห้อง</label>
           <select id="propertySelect">
-            <option value="__new__">➕ New property…</option>
+            <option value="__new__">➕ เพิ่มห้องใหม่…</option>
           </select>
           <div id="newProperty">
             <div class="row">
               <div>
-                <label class="req">Building</label>
-                <input id="building" placeholder="e.g. Ideo Sukhumvit" />
+                <label class="req">อาคาร</label>
+                <input id="building" placeholder="เช่น ไอดีโอ สุขุมวิท" />
               </div>
               <div>
-                <label class="req">Unit no.</label>
-                <input id="unitNo" placeholder="e.g. 2508" />
+                <label class="req">เลขห้อง</label>
+                <input id="unitNo" placeholder="เช่น 2508" />
               </div>
             </div>
           </div>
         </div>
 
         <div class="card">
-          <label class="req">Tenant name</label>
-          <input id="tenantName" placeholder="Display / tracking name" />
+          <label class="req">ชื่อผู้เช่า</label>
+          <input id="tenantName" placeholder="ชื่อสำหรับแสดง/ติดตาม" />
 
-          <label class="req">Monthly rent (THB)</label>
+          <label class="req">ค่าเช่าต่อเดือน (บาท)</label>
           <input id="rentAmount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="15000" />
 
-          <label class="req">Billing type</label>
+          <label class="req">รูปแบบการเรียกเก็บ</label>
           <div class="toggle" id="billingToggle">
-            <button type="button" data-val="fixed" class="on">Fixed rent</button>
-            <button type="button" data-val="rent_plus_utilities">Rent + utilities</button>
+            <button type="button" data-val="fixed" class="on">ค่าเช่าคงที่</button>
+            <button type="button" data-val="rent_plus_utilities">ค่าเช่า + ค่าน้ำ/ไฟ</button>
           </div>
-          <div class="hint">“Rent + utilities” stops overpayments being flagged as errors.</div>
+          <div class="hint">“ค่าเช่า + ค่าน้ำ/ไฟ” ช่วยไม่ให้ยอดชำระเกินถูกแจ้งเป็นข้อผิดพลาด</div>
 
-          <label>Deposit (THB)</label>
-          <input id="depositAmount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Optional" />
+          <label>เงินมัดจำ (บาท)</label>
+          <input id="depositAmount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="ไม่บังคับ" />
         </div>
 
         <div class="card">
-          <label class="req">Due day of month</label>
+          <label class="req">วันครบกำหนดชำระของเดือน</label>
           <input id="dueDay" type="number" min="1" max="28" step="1" placeholder="1–28" />
 
           <div class="row">
             <div>
-              <label class="req">Lease start</label>
+              <label class="req">วันเริ่มสัญญา</label>
               <input id="startDate" type="date" />
             </div>
             <div>
-              <label class="req">Lease end</label>
+              <label class="req">วันสิ้นสุดสัญญา</label>
               <input id="endDate" type="date" />
             </div>
           </div>
 
-          <label>First-invoice amount override (THB)</label>
-          <input id="firstInvoiceOverride" type="number" inputmode="decimal" min="1" step="0.01" placeholder="Blank = full rent (for prorated move-in)" />
+          <label>กำหนดยอดบิลแรกเอง (บาท)</label>
+          <input id="firstInvoiceOverride" type="number" inputmode="decimal" min="1" step="0.01" placeholder="เว้นว่าง = เต็มจำนวนค่าเช่า (สำหรับเข้าอยู่กลางเดือน)" />
 
-          <label>Expected payer name</label>
-          <input id="expectedPayerName" placeholder="Name on tenant’s bank account (optional)" />
-          <div class="hint">Helps catch wrong or borrowed slips later.</div>
+          <label>ชื่อผู้ชำระที่คาดไว้</label>
+          <input id="expectedPayerName" placeholder="ชื่อบัญชีธนาคารของผู้เช่า (ไม่บังคับ)" />
+          <div class="hint">ช่วยตรวจจับสลิปที่ผิดหรือยืมมาในภายหลัง</div>
         </div>
 
-        <button type="submit" class="primary" id="submitBtn">Create lease</button>
+        <button type="submit" class="primary" id="submitBtn">สร้างสัญญาเช่า</button>
       </form>
     </div>
   </div>
@@ -119,28 +119,28 @@
     async function boot() {
       try {
         const cfg = await fetch('/api/config').then((r) => r.json());
-        if (!cfg.liffId) throw new Error('Server missing LIFF_ID');
+        if (!cfg.liffId) throw new Error('เซิร์ฟเวอร์ไม่พบ LIFF_ID');
         await liff.init({ liffId: cfg.liffId });
         if (!liff.isLoggedIn()) { liff.login(); return; }
         idToken = liff.getIDToken();
-        if (!idToken) throw new Error('No ID token — check the LIFF scope includes “openid”.');
+        if (!idToken) throw new Error('ไม่พบ ID token — ตรวจสอบว่า LIFF scope มี “openid” หรือไม่');
         await loadProperties();
         $('boot').classList.add('hidden');
         $('app').classList.remove('hidden');
       } catch (e) {
-        $('boot').textContent = 'Setup error: ' + (e && e.message ? e.message : e);
+        $('boot').textContent = 'ตั้งค่าผิดพลาด: ' + (e && e.message ? e.message : e);
       }
     }
 
     async function loadProperties() {
       const res = await fetch('/api/properties', { headers: { Authorization: 'Bearer ' + idToken } });
-      if (!res.ok) throw new Error('Could not load properties (' + res.status + ')');
+      if (!res.ok) throw new Error('โหลดรายการห้องไม่สำเร็จ (' + res.status + ')');
       const { properties } = await res.json();
       const sel = $('propertySelect');
       for (const p of properties) {
         const opt = document.createElement('option');
         opt.value = p.id;
-        opt.textContent = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'Unit';
+        opt.textContent = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'ห้อง';
         sel.insertBefore(opt, sel.firstChild);
       }
       sel.value = properties.length ? properties[0].id : '__new__';
@@ -195,15 +195,15 @@
           body: JSON.stringify(body),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || ('Error ' + res.status));
+        if (!res.ok) throw new Error(data.error || ('ข้อผิดพลาด ' + res.status));
 
-        const unit = [data.property.building, data.property.unit_no].filter(Boolean).join(' ') || 'unit';
+        const unit = [data.property.building, data.property.unit_no].filter(Boolean).join(' ') || 'ห้อง';
         const rent = Number(data.lease.rent_amount).toLocaleString();
-        showMsg('ok', `Lease created — ${unit}, ฿${rent}/mo, due day ${data.lease.due_day}. First invoice for ${data.invoice.period_month} created. Now run /setup in the tenant’s group to link it.`);
+        showMsg('ok', `สร้างสัญญาเช่าแล้ว — ${unit}, ฿${rent}/เดือน, ครบกำหนดวันที่ ${data.lease.due_day} ของเดือน สร้างบิลแรกสำหรับงวด ${data.invoice.period_month} แล้ว ตอนนี้พิมพ์ /setup ในกลุ่มของผู้เช่าเพื่อเชื่อมกลุ่มครับ`);
         $('form').reset();
         billingType = 'fixed';
       } catch (err) {
-        showMsg('err', err.message || 'Something went wrong');
+        showMsg('err', err.message || 'เกิดข้อผิดพลาดบางอย่าง');
       } finally {
         $('submitBtn').disabled = false;
       }

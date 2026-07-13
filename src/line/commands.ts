@@ -21,7 +21,7 @@ const BIND_PREFIX = 'bind:';
 // Avatar "connected" card served from public/ (see @fastify/static). The ratio
 // must match the cropped image (see scripts/setup-cards.ts).
 const CONNECTED_IMAGE_PATH = 'stickers/setup-connected.png';
-const CONNECTED_IMAGE_RATIO = '722:829';
+const CONNECTED_IMAGE_RATIO = '718:580';
 
 /**
  * The bind-success reply: the avatar "connected" card when a public image URL is

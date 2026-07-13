@@ -109,12 +109,13 @@
     let billingType = 'fixed';
 
     const $ = (id) => document.getElementById(id);
-    // Condo label: "The Esse Asoke 333/23" (mirrors src/services/labels.ts).
+    // Condo label: condo name alone, "The Esse Asoke" (mirrors src/services/labels.ts).
     function propLabel(p) {
       const name = (p.name || '').trim();
       const unit = (p.unit_no || '').trim();
-      if (name && unit) return name.includes(unit) ? name : name + ' ' + unit;
-      return name || [p.building, p.unit_no].filter(Boolean).join(' ') || unit || 'ห้อง';
+      // Legacy rows fold the unit into `name` ("XYZ 12/34") — strip it off.
+      if (name && unit && name.endsWith(unit)) return name.slice(0, -unit.length).trim() || name;
+      return name || (p.building || '').trim() || 'ห้อง';
     }
     function showMsg(kind, text) {
       const el = $('msg');

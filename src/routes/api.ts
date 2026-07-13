@@ -4,15 +4,7 @@ import { config } from '../config';
 import { verifyIdToken } from '../liff/verify';
 import { getLandlordByLineUserId, listUnlinkedLandlords, upsertLandlord } from '../services/landlords';
 import { createLease, listProperties } from '../services/leases';
-import {
-  currentPeriod,
-  ensureInvoicesForPeriod,
-  getCashflow,
-  getFamilyOverview,
-  getUnitGrid,
-  getUpcomingExpiries,
-  isPeriod,
-} from '../services/views';
+import { getHomeOverview, getPropertyDetail } from '../services/views';
 
 // Authenticate a LIFF request via `Authorization: Bearer <id_token>`.
 // Throws AuthError (→ 401) on any problem, NeedsLinkError (→ 403) when the
@@ -92,31 +84,24 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     return { properties: await listProperties(landlordId) };
   });
 
-  // Phase 3 — read-only dashboard payload: unit grid + cashflow + expiries.
-  app.get('/api/dashboard', async (request, reply) => {
-    const landlordId = await requireAuth(request, reply);
-    if (!landlordId) return reply;
-
-    const q = request.query as { period?: string };
-    const period = q.period && isPeriod(q.period) ? q.period : currentPeriod();
-
-    await ensureInvoicesForPeriod(landlordId, period);
-    const [grid, cashflow, expiries] = await Promise.all([
-      getUnitGrid(landlordId, period),
-      getCashflow(landlordId, period, 6),
-      getUpcomingExpiries(landlordId, 90),
-    ]);
-    return { ...grid, cashflow, expiries, currentPeriod: currentPeriod() };
+  // Dashboard main page: family pool balance + one card per condo.
+  // Internal family app — any authenticated member sees the whole picture.
+  app.get('/api/home', async (request, reply) => {
+    if (!(await requireAuth(request, reply))) return reply;
+    return getHomeOverview();
   });
 
-  // Family view: pooled totals + per-condo breakdown across ALL owners.
-  // Internal family app — any authenticated member sees the whole picture.
-  app.get('/api/family', async (request, reply) => {
+  // Dashboard condo page: all-time net, this month's rent status,
+  // 12-month net series, and the condo's full transaction list.
+  app.get('/api/property/:id', async (request, reply) => {
     if (!(await requireAuth(request, reply))) return reply;
 
-    const q = request.query as { period?: string };
-    const period = q.period && isPeriod(q.period) ? q.period : currentPeriod();
-    return { ...(await getFamilyOverview(period)), currentPeriod: currentPeriod() };
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'รหัสห้องไม่ถูกต้อง' });
+
+    const detail = await getPropertyDetail(params.data.id);
+    if (!detail) return reply.code(404).send({ error: 'ไม่พบห้องนี้ในระบบ' });
+    return detail;
   });
 
   app.post('/api/leases', async (request, reply) => {

@@ -49,7 +49,7 @@ function unitLabel(lease: Lease, property: Property): string {
 }
 
 /** A lease bills for a period when the period month overlaps [start_date, end_date]. */
-function leaseCoversPeriod(lease: Lease, period: string): boolean {
+function leaseCoversPeriod(lease: Pick<Lease, 'start_date' | 'end_date'>, period: string): boolean {
   return period >= lease.start_date.slice(0, 7) && period <= lease.end_date.slice(0, 7);
 }
 
@@ -208,178 +208,57 @@ export async function getUnitGrid(landlordId: string, period: string): Promise<U
   return { period, units, totals };
 }
 
-// ── Portfolio cashflow ─────────────────────────────────────────
-
-export interface CashflowMonth {
-  month: string;
-  income: number;
-  expense: number;
-  net: number;
-}
-
-/**
- * Monthly in/out/net for the `months` ending at `endPeriod`.
- * `landlordId` scopes to one owner; null = the whole family (incl. pool rows).
- */
-export async function getCashflow(
-  landlordId: string | null,
-  endPeriod: string,
-  months = 6,
-): Promise<CashflowMonth[]> {
-  const startPeriod = shiftPeriod(endPeriod, -(months - 1));
-  let query = db
-    .from('transactions')
-    .select('direction, amount, txn_datetime')
-    .gte('txn_datetime', periodStartIso(startPeriod))
-    .lt('txn_datetime', periodStartIso(shiftPeriod(endPeriod, 1)));
-  if (landlordId !== null) query = query.eq('landlord_id', landlordId);
-  const { data, error } = await query;
-  if (error) throw new Error(`getCashflow: ${error.message}`);
-
-  const byMonth = new Map<string, CashflowMonth>();
-  for (let i = 0; i < months; i++) {
-    const month = shiftPeriod(startPeriod, i);
-    byMonth.set(month, { month, income: 0, expense: 0, net: 0 });
-  }
-  for (const t of (data ?? []) as Array<{ direction: 'in' | 'out'; amount: number; txn_datetime: string }>) {
-    const bucket = byMonth.get(bangkokMonth(t.txn_datetime));
-    if (!bucket) continue;
-    if (t.direction === 'in') bucket.income += Number(t.amount);
-    else bucket.expense += Number(t.amount);
-  }
-  for (const b of byMonth.values()) {
-    b.income = round2(b.income);
-    b.expense = round2(b.expense);
-    b.net = round2(b.income - b.expense);
-  }
-  return [...byMonth.values()];
-}
-
-// ── Family overview (pooled + per-condo) ──────────────────────
-// The family pools every baht of rent into one common fund, so the
-// pooled view is an aggregate over ALL owners' transactions plus
-// pool-level rows (landlord_id null — e.g. family spending).
-
-export interface FamilyTxn {
-  date: string; // 'YYYY-MM-DD' in Asia/Bangkok
-  direction: 'in' | 'out';
-  category: string;
-  amount: number;
-  note: string | null;
-}
-
-export interface FamilyPropertyRow {
-  propertyId: string;
-  name: string;
-  owner: string;
-  income: number; // this period
-  expense: number;
-  net: number;
-  txns: FamilyTxn[];
-}
-
-export interface FamilyOwnerRow {
-  name: string;
-  income: number;
-  expense: number;
-  net: number;
-}
-
-export interface FamilyOverview {
-  period: string;
-  totals: { income: number; expense: number; net: number; poolBalance: number };
-  owners: FamilyOwnerRow[]; // owners active this period; 'กองกลาง' = pool rows
-  properties: FamilyPropertyRow[]; // every condo, active or not
-  poolTxns: FamilyTxn[]; // pool-level rows this period
-  cashflow: CashflowMonth[];
-}
+// ── Home overview (dashboard main page) ────────────────────────
+// One card per condo answering: rented? how much? until when? whose?
+// Plus the family pool's lifetime net balance for the hero card.
 
 /** Full YYYY-MM-DD Bangkok date of a timestamptz. */
 function bangkokDate(iso: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date(iso));
 }
 
-const POOL_OWNER = 'กองกลาง';
+export interface HomeCard {
+  propertyId: string;
+  name: string;
+  owner: string;
+  tenant: string | null; // null = no active lease (vacant)
+  rent: number | null;
+  leaseEnd: string | null; // 'YYYY-MM-DD'
+}
 
-export async function getFamilyOverview(period: string): Promise<FamilyOverview> {
-  interface TxnRow {
-    landlord_id: string | null;
-    property_id: string | null;
-    direction: 'in' | 'out';
-    category: string;
-    amount: number;
-    txn_datetime: string;
-    note: string | null;
-  }
+export interface HomeOverview {
+  poolBalance: number; // lifetime net: every baht in minus every baht out
+  properties: HomeCard[];
+}
 
-  const [landlordsRes, propertiesRes, periodTxnsRes, allTxnsRes, cashflow] = await Promise.all([
+export async function getHomeOverview(): Promise<HomeOverview> {
+  const [landlordsRes, propertiesRes, leasesRes, txnsRes] = await Promise.all([
     db.from('landlords').select('id, display_name'),
     db.from('properties').select('id, name, building, unit_no, landlord_id').order('created_at'),
-    db
-      .from('transactions')
-      .select('landlord_id, property_id, direction, category, amount, txn_datetime, note')
-      .gte('txn_datetime', periodStartIso(period))
-      .lt('txn_datetime', periodStartIso(shiftPeriod(period, 1)))
-      .order('txn_datetime'),
-    // Pool balance is lifetime net: every baht in minus every baht out.
+    db.from('leases').select('property_id, tenant_name, rent_amount, end_date').eq('status', 'active'),
     db.from('transactions').select('direction, amount'),
-    getCashflow(null, period, 6),
   ]);
-  if (landlordsRes.error) throw new Error(`familyOverview/landlords: ${landlordsRes.error.message}`);
-  if (propertiesRes.error) throw new Error(`familyOverview/properties: ${propertiesRes.error.message}`);
-  if (periodTxnsRes.error) throw new Error(`familyOverview/txns: ${periodTxnsRes.error.message}`);
-  if (allTxnsRes.error) throw new Error(`familyOverview/allTxns: ${allTxnsRes.error.message}`);
+  if (landlordsRes.error) throw new Error(`homeOverview/landlords: ${landlordsRes.error.message}`);
+  if (propertiesRes.error) throw new Error(`homeOverview/properties: ${propertiesRes.error.message}`);
+  if (leasesRes.error) throw new Error(`homeOverview/leases: ${leasesRes.error.message}`);
+  if (txnsRes.error) throw new Error(`homeOverview/txns: ${txnsRes.error.message}`);
 
   const ownerName = new Map<string, string>(
     (landlordsRes.data ?? []).map((l) => [l.id as string, (l.display_name as string | null) ?? '(ไม่มีชื่อ)']),
   );
 
+  // A property with several active leases shows the one ending last.
+  type ActiveLease = { property_id: string; tenant_name: string; rent_amount: number; end_date: string };
+  const leaseByProperty = new Map<string, ActiveLease>();
+  for (const l of (leasesRes.data ?? []) as ActiveLease[]) {
+    const prev = leaseByProperty.get(l.property_id);
+    if (!prev || l.end_date > prev.end_date) leaseByProperty.set(l.property_id, l);
+  }
+
   let poolBalance = 0;
-  for (const t of (allTxnsRes.data ?? []) as Array<{ direction: 'in' | 'out'; amount: number }>) {
+  for (const t of (txnsRes.data ?? []) as Array<{ direction: 'in' | 'out'; amount: number }>) {
     poolBalance += t.direction === 'in' ? Number(t.amount) : -Number(t.amount);
   }
-
-  const toFamilyTxn = (t: TxnRow): FamilyTxn => ({
-    date: bangkokDate(t.txn_datetime),
-    direction: t.direction,
-    category: t.category,
-    amount: Number(t.amount),
-    note: t.note,
-  });
-
-  const totals = { income: 0, expense: 0, net: 0, poolBalance: round2(poolBalance) };
-  const ownerAgg = new Map<string, FamilyOwnerRow>();
-  const propAgg = new Map<string, { income: number; expense: number; txns: FamilyTxn[] }>();
-  const poolTxns: FamilyTxn[] = [];
-
-  for (const t of (periodTxnsRes.data ?? []) as TxnRow[]) {
-    const amount = Number(t.amount);
-    if (t.direction === 'in') totals.income += amount;
-    else totals.expense += amount;
-
-    const owner = t.landlord_id ? (ownerName.get(t.landlord_id) ?? '(ไม่มีชื่อ)') : POOL_OWNER;
-    const o = ownerAgg.get(owner) ?? { name: owner, income: 0, expense: 0, net: 0 };
-    if (t.direction === 'in') o.income += amount;
-    else o.expense += amount;
-    ownerAgg.set(owner, o);
-
-    if (t.property_id) {
-      const p = propAgg.get(t.property_id) ?? { income: 0, expense: 0, txns: [] };
-      if (t.direction === 'in') p.income += amount;
-      else p.expense += amount;
-      p.txns.push(toFamilyTxn(t));
-      propAgg.set(t.property_id, p);
-    } else if (!t.landlord_id) {
-      poolTxns.push(toFamilyTxn(t));
-    }
-  }
-  totals.income = round2(totals.income);
-  totals.expense = round2(totals.expense);
-  totals.net = round2(totals.income - totals.expense);
-
-  const owners = [...ownerAgg.values()]
-    .map((o) => ({ ...o, income: round2(o.income), expense: round2(o.expense), net: round2(o.income - o.expense) }))
-    .sort((a, b) => b.net - a.net);
 
   const properties = ((propertiesRes.data ?? []) as Array<{
     id: string;
@@ -387,45 +266,161 @@ export async function getFamilyOverview(period: string): Promise<FamilyOverview>
     building: string | null;
     unit_no: string | null;
     landlord_id: string;
-  }>).map((p): FamilyPropertyRow => {
-    const agg = propAgg.get(p.id) ?? { income: 0, expense: 0, txns: [] };
+  }>).map((p): HomeCard => {
+    const lease = leaseByProperty.get(p.id);
     return {
       propertyId: p.id,
       name: propertyLabel(p) || '(ไม่มีชื่อ)',
       owner: ownerName.get(p.landlord_id) ?? '(ไม่มีชื่อ)',
-      income: round2(agg.income),
-      expense: round2(agg.expense),
-      net: round2(agg.income - agg.expense),
-      txns: agg.txns,
+      tenant: lease?.tenant_name ?? null,
+      rent: lease ? Number(lease.rent_amount) : null,
+      leaseEnd: lease?.end_date ?? null,
     };
   });
 
-  return { period, totals, owners, properties, poolTxns, cashflow };
+  return { poolBalance: round2(poolBalance), properties };
 }
 
-// ── Upcoming lease expiries ────────────────────────────────────
+// ── Property detail (dashboard condo page) ─────────────────────
 
-export interface ExpiryRow {
-  leaseId: string;
-  unit: string;
-  tenant: string;
-  endDate: string;
-  daysLeft: number; // negative = already past end_date but still marked active
+export interface PropertyTxn {
+  date: string; // 'YYYY-MM-DD' in Asia/Bangkok
+  month: string; // 'YYYY-MM' Bangkok month — the client's filter key
+  direction: 'in' | 'out';
+  category: string;
+  amount: number;
+  note: string | null;
 }
 
-export async function getUpcomingExpiries(landlordId: string, withinDays = 90): Promise<ExpiryRow[]> {
-  const leases = await activeLeasesWithProperty(landlordId);
-  const today = bangkokToday();
-  return leases
-    .map((l) => ({
-      leaseId: l.id,
-      unit: unitLabel(l, l.property),
-      tenant: l.tenant_name,
-      endDate: l.end_date,
-      daysLeft: Math.round((Date.parse(l.end_date) - Date.parse(today)) / 86_400_000),
-    }))
-    .filter((e) => e.daysLeft <= withinDays)
-    .sort((a, b) => a.daysLeft - b.daysLeft);
+export interface PropertyMonthNet {
+  month: string;
+  income: number;
+  expense: number;
+  net: number;
+}
+
+export type RentState = 'vacant' | 'paid' | 'partial' | 'unpaid';
+
+export interface PropertyDetail {
+  propertyId: string;
+  name: string;
+  owner: string;
+  allTime: { income: number; expense: number; net: number };
+  rent: { state: RentState; tenant: string | null; due: number; paid: number; dueDate: string | null };
+  monthly: PropertyMonthNet[]; // last 12 Bangkok months, oldest first
+  txns: PropertyTxn[]; // all of this condo's transactions, newest first
+  currentPeriod: string;
+}
+
+export async function getPropertyDetail(propertyId: string): Promise<PropertyDetail | null> {
+  const period = currentPeriod();
+
+  const propRes = await db
+    .from('properties')
+    .select('id, name, building, unit_no, landlord_id')
+    .eq('id', propertyId)
+    .maybeSingle();
+  if (propRes.error) throw new Error(`propertyDetail/property: ${propRes.error.message}`);
+  const prop = propRes.data as {
+    id: string;
+    name: string | null;
+    building: string | null;
+    unit_no: string | null;
+    landlord_id: string;
+  } | null;
+  if (!prop) return null;
+
+  // Make sure this month's invoice exists before reading paid/unpaid off it.
+  await ensureInvoicesForPeriod(prop.landlord_id, period);
+
+  const [ownerRes, leasesRes, txnsRes] = await Promise.all([
+    db.from('landlords').select('display_name').eq('id', prop.landlord_id).maybeSingle(),
+    db
+      .from('leases')
+      .select('id, tenant_name, rent_amount, due_day, start_date, end_date')
+      .eq('property_id', propertyId)
+      .eq('status', 'active'),
+    db
+      .from('transactions')
+      .select('direction, category, amount, txn_datetime, note')
+      .eq('property_id', propertyId)
+      .order('txn_datetime', { ascending: false }),
+  ]);
+  if (ownerRes.error) throw new Error(`propertyDetail/owner: ${ownerRes.error.message}`);
+  if (leasesRes.error) throw new Error(`propertyDetail/leases: ${leasesRes.error.message}`);
+  if (txnsRes.error) throw new Error(`propertyDetail/txns: ${txnsRes.error.message}`);
+
+  // This month's rent status off the active lease billing in `period`.
+  type LeaseRow = Pick<Lease, 'id' | 'tenant_name' | 'rent_amount' | 'due_day' | 'start_date' | 'end_date'>;
+  const lease = ((leasesRes.data ?? []) as LeaseRow[])
+    .filter((l) => leaseCoversPeriod(l, period))
+    .sort((a, b) => b.end_date.localeCompare(a.end_date))[0];
+
+  let rent: PropertyDetail['rent'] = { state: 'vacant', tenant: null, due: 0, paid: 0, dueDate: null };
+  if (lease) {
+    const invRes = await db
+      .from('invoices')
+      .select('amount_due, paid_amount, due_date')
+      .eq('lease_id', lease.id)
+      .eq('period_month', period)
+      .maybeSingle();
+    if (invRes.error) throw new Error(`propertyDetail/invoice: ${invRes.error.message}`);
+    const inv = invRes.data as { amount_due: number; paid_amount: number; due_date: string } | null;
+    const due = inv ? Number(inv.amount_due) : Number(lease.rent_amount);
+    const paid = inv ? Number(inv.paid_amount) : 0;
+    rent = {
+      state: paid <= 0 ? 'unpaid' : paid < due ? 'partial' : 'paid',
+      tenant: lease.tenant_name,
+      due: round2(due),
+      paid: round2(paid),
+      dueDate: inv?.due_date ?? `${period}-${String(lease.due_day).padStart(2, '0')}`,
+    };
+  }
+
+  // One pass over the condo's transactions: all-time totals, the last-12-months
+  // net series for the bar chart, and the (already newest-first) list.
+  const startMonth = shiftPeriod(period, -11);
+  const byMonth = new Map<string, PropertyMonthNet>();
+  for (let i = 0; i < 12; i++) {
+    const month = shiftPeriod(startMonth, i);
+    byMonth.set(month, { month, income: 0, expense: 0, net: 0 });
+  }
+
+  const allTime = { income: 0, expense: 0, net: 0 };
+  const txns: PropertyTxn[] = [];
+  type TxnRow = { direction: 'in' | 'out'; category: string; amount: number; txn_datetime: string; note: string | null };
+  for (const t of (txnsRes.data ?? []) as TxnRow[]) {
+    const amount = Number(t.amount);
+    if (t.direction === 'in') allTime.income += amount;
+    else allTime.expense += amount;
+
+    const month = bangkokMonth(t.txn_datetime);
+    const bucket = byMonth.get(month);
+    if (bucket) {
+      if (t.direction === 'in') bucket.income += amount;
+      else bucket.expense += amount;
+    }
+    txns.push({ date: bangkokDate(t.txn_datetime), month, direction: t.direction, category: t.category, amount, note: t.note });
+  }
+  allTime.income = round2(allTime.income);
+  allTime.expense = round2(allTime.expense);
+  allTime.net = round2(allTime.income - allTime.expense);
+  for (const b of byMonth.values()) {
+    b.income = round2(b.income);
+    b.expense = round2(b.expense);
+    b.net = round2(b.income - b.expense);
+  }
+
+  return {
+    propertyId: prop.id,
+    name: propertyLabel(prop) || '(ไม่มีชื่อ)',
+    owner: (ownerRes.data?.display_name as string | null) ?? '(ไม่มีชื่อ)',
+    allTime,
+    rent,
+    monthly: [...byMonth.values()],
+    txns,
+    currentPeriod: period,
+  };
 }
 
 // ── Thai text builders (chat surfaces; Phase 5 cron reuses these) ──

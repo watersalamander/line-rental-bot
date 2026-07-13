@@ -1,4 +1,5 @@
 import { db } from '../db/client';
+import { propertyLabel } from './labels';
 import type { Invoice, Lease, Property } from '../db/types';
 
 // ─────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ function bangkokMonth(iso: string): string {
 const round2 = (n: number) => Number(n.toFixed(2));
 
 function unitLabel(lease: Lease, property: Property): string {
-  return [property.building, property.unit_no].filter(Boolean).join(' ') || property.name || lease.tenant_name;
+  return propertyLabel(property) || lease.tenant_name;
 }
 
 /** A lease bills for a period when the period month overlaps [start_date, end_date]. */
@@ -390,7 +391,7 @@ export async function getFamilyOverview(period: string): Promise<FamilyOverview>
     const agg = propAgg.get(p.id) ?? { income: 0, expense: 0, txns: [] };
     return {
       propertyId: p.id,
-      name: p.name || [p.building, p.unit_no].filter(Boolean).join(' ') || '(ไม่มีชื่อ)',
+      name: propertyLabel(p) || '(ไม่มีชื่อ)',
       owner: ownerName.get(p.landlord_id) ?? '(ไม่มีชื่อ)',
       income: round2(agg.income),
       expense: round2(agg.expense),

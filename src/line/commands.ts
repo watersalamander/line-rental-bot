@@ -2,6 +2,7 @@ import type { messagingApi, MessageEvent, PostbackEvent } from '@line/bot-sdk';
 import { replyMessages, replyText } from './client';
 import { getLandlordByLineUserId } from '../services/landlords';
 import { bindGroupToLease, GroupAlreadyBoundError, listUnboundActiveLeases } from '../services/leases';
+import { propertyLabel } from '../services/labels';
 import {
   currentPeriod,
   ensureInvoicesForPeriod,
@@ -17,8 +18,7 @@ import type { Lease, Property } from '../db/types';
 const BIND_PREFIX = 'bind:';
 
 function unitLabel(lease: Lease & { property: Property }): string {
-  const p = lease.property;
-  const base = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || lease.tenant_name;
+  const base = propertyLabel(lease.property) || lease.tenant_name;
   return base.length > 20 ? `${base.slice(0, 19)}…` : base; // quick-reply label cap is 20 chars
 }
 
@@ -187,7 +187,7 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
   try {
     const lease = await bindGroupToLease(leaseId, event.source.groupId, landlord.id);
     const p = lease.property;
-    const unit = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || lease.tenant_name;
+    const unit = propertyLabel(p) || lease.tenant_name;
     await replyText(
       replyToken,
       `✓ เชื่อมสำเร็จ — กลุ่มนี้คือ ${unit} (ผู้เช่า: ${lease.tenant_name}) แล้วครับ\nสลิปที่ส่งในกลุ่มนี้จะถูกจับคู่กับบิลของห้องนี้`,

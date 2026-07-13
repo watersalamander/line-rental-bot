@@ -2,6 +2,7 @@ import type { MessageEvent, PostbackEvent, messagingApi } from '@line/bot-sdk';
 import { getMessageContent, replyMessages, replyText } from './client';
 import { getLandlordByLineUserId } from '../services/landlords';
 import { listProperties } from '../services/leases';
+import { propertyLabel } from '../services/labels';
 import { getVerifier } from '../slip';
 import { config } from '../config';
 import {
@@ -39,8 +40,8 @@ const baht = (n: number) => `฿${Number(n).toLocaleString('en-US')}`;
 
 const quickLabel = (s: string) => (s.length > 20 ? `${s.slice(0, 19)}…` : s); // LINE cap
 
-function propertyLabel(p: Property): string {
-  return [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'ห้อง';
+function propertyLabelOrRoom(p: Property): string {
+  return propertyLabel(p) || 'ห้อง';
 }
 
 // Typed expense: "<amount> [note]", e.g. "500 ค่าส่วนกลาง" / "1,250.50 ซ่อมแอร์".
@@ -179,9 +180,9 @@ async function askProperty(
       type: 'action',
       action: {
         type: 'postback',
-        label: quickLabel(propertyLabel(p)),
+        label: quickLabel(propertyLabelOrRoom(p)),
         data: `${EXP_PROP_PREFIX}${txnId}:${p.id}:${flag}:${dir}`,
-        displayText: propertyLabel(p),
+        displayText: propertyLabelOrRoom(p),
       },
     })),
     {
@@ -217,7 +218,7 @@ async function askCategory(replyToken: string, txnId: string, amount: number, di
 }
 
 function confirmText(expense: ExpenseRow): string {
-  const where = expense.property ? propertyLabel(expense.property) : 'ทั่วไป';
+  const where = expense.property ? propertyLabelOrRoom(expense.property) : 'ทั่วไป';
   const cat = CATEGORY_TH[expense.category as TxnCategory] ?? expense.category;
   return `✓ บันทึก${expense.direction === 'in' ? 'รายรับ' : 'รายจ่าย'} ${baht(expense.amount)} — ${where} · ${cat}`;
 }

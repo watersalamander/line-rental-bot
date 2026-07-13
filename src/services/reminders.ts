@@ -1,6 +1,7 @@
 import { db } from '../db/client';
 import { pushText } from '../line/client';
 import { claimJobKey } from './jobs';
+import { propertyLabel } from './labels';
 import { bangkokToday } from './views';
 import type { Invoice, Landlord, Lease, Property } from '../db/types';
 
@@ -66,7 +67,7 @@ export async function findReminderTargets(
       lease,
       property: property as Property,
       landlord,
-      unit: [property.building, property.unit_no].filter(Boolean).join(' ') || property.name || lease.tenant_name,
+      unit: propertyLabel(property) || lease.tenant_name,
       remaining: Number(remaining.toFixed(2)),
       daysLate,
     });

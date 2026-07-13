@@ -1,4 +1,5 @@
 import { db } from '../db/client';
+import { propertyLabel } from './labels';
 import type { Invoice, Lease, Property } from '../db/types';
 import type { SlipData } from '../slip/types';
 
@@ -32,7 +33,7 @@ function nameMatches(expected: string | null | undefined, actual: string | null 
 }
 
 function unitLabel(lease: Lease, property: Property): string {
-  return [property.building, property.unit_no].filter(Boolean).join(' ') || property.name || lease.tenant_name;
+  return propertyLabel(property) || lease.tenant_name;
 }
 
 async function findOldestOpenInvoice(leaseId: string): Promise<Invoice | null> {

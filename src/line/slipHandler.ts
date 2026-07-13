@@ -2,6 +2,7 @@ import type { MessageEvent } from '@line/bot-sdk';
 import { getMessageContent, pushText, replyText } from './client';
 import { findActiveLeaseByGroup } from '../services/leases';
 import { reconcileSlip, type ReconResult } from '../services/reconcile';
+import { propertyLabel } from '../services/labels';
 import { getVerifier } from '../slip';
 import { config } from '../config';
 
@@ -56,7 +57,7 @@ async function handleVerifyFailure(
   property: { building: string | null; unit_no: string | null; name: string | null },
   lease: { tenant_name: string },
 ): Promise<void> {
-  const unit = [property.building, property.unit_no].filter(Boolean).join(' ') || property.name || lease.tenant_name;
+  const unit = propertyLabel(property) || lease.tenant_name;
 
   if (kind === 'duplicate') {
     await replyText(replyToken, 'สลิปนี้เคยส่งมาแล้วนะครับ'); // "this slip was already submitted"

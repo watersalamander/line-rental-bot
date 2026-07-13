@@ -109,6 +109,13 @@
     let billingType = 'fixed';
 
     const $ = (id) => document.getElementById(id);
+    // Condo label: "The Esse Asoke 333/23" (mirrors src/services/labels.ts).
+    function propLabel(p) {
+      const name = (p.name || '').trim();
+      const unit = (p.unit_no || '').trim();
+      if (name && unit) return name.includes(unit) ? name : name + ' ' + unit;
+      return name || [p.building, p.unit_no].filter(Boolean).join(' ') || unit || 'ห้อง';
+    }
     function showMsg(kind, text) {
       const el = $('msg');
       el.className = 'msg ' + kind;
@@ -140,7 +147,7 @@
       for (const p of properties) {
         const opt = document.createElement('option');
         opt.value = p.id;
-        opt.textContent = [p.building, p.unit_no].filter(Boolean).join(' ') || p.name || 'ห้อง';
+        opt.textContent = propLabel(p);
         sel.insertBefore(opt, sel.firstChild);
       }
       sel.value = properties.length ? properties[0].id : '__new__';
@@ -197,7 +204,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || ('ข้อผิดพลาด ' + res.status));
 
-        const unit = [data.property.building, data.property.unit_no].filter(Boolean).join(' ') || 'ห้อง';
+        const unit = propLabel(data.property);
         const rent = Number(data.lease.rent_amount).toLocaleString();
         showMsg('ok', `สร้างสัญญาเช่าแล้ว — ${unit}, ฿${rent}/เดือน, ครบกำหนดวันที่ ${data.lease.due_day} ของเดือน สร้างบิลแรกสำหรับงวด ${data.invoice.period_month} แล้ว ตอนนี้พิมพ์ /setup ในกลุ่มของผู้เช่าเพื่อเชื่อมกลุ่มครับ`);
         $('form').reset();

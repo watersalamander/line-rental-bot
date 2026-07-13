@@ -1,5 +1,5 @@
-import type { MessageEvent } from '@line/bot-sdk';
-import { getMessageContent, pushText, replyText } from './client';
+import type { MessageEvent, messagingApi } from '@line/bot-sdk';
+import { getMessageContent, pushText, replyMessages, replyText } from './client';
 import { findActiveLeaseByGroup } from '../services/leases';
 import { reconcileSlip, type ReconResult } from '../services/reconcile';
 import { propertyLabel } from '../services/labels';
@@ -7,6 +7,11 @@ import { getVerifier } from '../slip';
 import { config } from '../config';
 
 const baht = (n: number) => `฿${Number(n).toLocaleString('en-US')}`;
+
+// Avatar card served from public/ (see @fastify/static). RATIO must match the
+// cropped image's width:height so the hero isn't distorted or clipped.
+const RECEIVED_IMAGE_PATH = 'stickers/rent-received.png';
+const RECEIVED_IMAGE_RATIO = '34:49'; // matches the 476x686 crop from scripts/avatar-sticker.ts
 
 /**
  * Slip reconciliation entry point (spec §5). Runs only for image messages in a
@@ -42,7 +47,19 @@ export async function handleSlipImage(event: MessageEvent): Promise<void> {
 
   const result = await reconcileSlip({ landlordId: landlord.id, lease, property, slip: outcome.slip });
   console.log(`[slip] reconciled status=${result.status} late=${result.late} suspect=${result.suspect}`);
-  await replyText(event.replyToken, groupReply(result));
+
+  // A confirmed receipt gets the avatar card; a re-sent (duplicate) slip and the
+  // verify-failure paths keep plain text — a cheerful "thank you" would be wrong.
+  // Falls back to text when PUBLIC_BASE_URL is unset (Flex images need a public URL).
+  const imageUrl =
+    config.PUBLIC_BASE_URL && result.status !== 'duplicate'
+      ? `${config.PUBLIC_BASE_URL}/${RECEIVED_IMAGE_PATH}`
+      : null;
+  if (imageUrl) {
+    await replyMessages(event.replyToken, [receivedFlex(result, imageUrl)]);
+  } else {
+    await replyText(event.replyToken, groupReply(result));
+  }
 
   const alert = landlordAlert(result);
   if (alert && landlord.line_user_id) {
@@ -88,6 +105,45 @@ function groupReply(r: ReconResult): string {
     default:
       return `✓ ได้รับ ${baht(r.amount)} — ${r.unit}`;
   }
+}
+
+/**
+ * The polished in-group reply: the avatar as a Flex hero image plus the concrete
+ * figures below. altText carries the plain-text version for notifications and
+ * clients that can't render Flex, so no information is ever lost.
+ */
+function receivedFlex(r: ReconResult, imageUrl: string): messagingApi.FlexMessage {
+  const detail = [r.unit, r.period ? `งวด ${r.period}` : null].filter(Boolean).join(' · ');
+
+  const notes = [r.late ? 'ล่าช้า' : 'ตรงเวลา'];
+  if (r.status === 'partial') notes.push(`ยังค้างอีก ${baht(r.remaining ?? 0)}`);
+  if (r.status === 'overpaid') notes.push(`เกินยอด ${baht(r.overpaidBy ?? 0)}`);
+  if (r.status === 'no_open_invoice') notes.push('ชำระล่วงหน้า');
+
+  return {
+    type: 'flex',
+    altText: groupReply(r),
+    contents: {
+      type: 'bubble',
+      hero: {
+        type: 'image',
+        url: imageUrl,
+        size: 'full',
+        aspectRatio: RECEIVED_IMAGE_RATIO,
+        aspectMode: 'cover',
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: `ได้รับ ${baht(r.amount)}`, weight: 'bold', size: 'xl', color: '#2E7D32', wrap: true },
+          { type: 'text', text: detail, size: 'sm', color: '#555555', wrap: true },
+          { type: 'text', text: notes.join(' · '), size: 'sm', color: '#8A8A8A', wrap: true },
+        ],
+      },
+    },
+  };
 }
 
 /** Private push to the landlord — only for cases that need a human's eyes. */

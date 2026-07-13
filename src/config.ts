@@ -24,6 +24,15 @@ const schema = z.object({
   LINE_LOGIN_CHANNEL_ID: z.string().optional(),
   LIFF_ID: z.string().optional(),
 
+  // Public HTTPS origin of this server (e.g. https://xxx.up.railway.app), no
+  // trailing slash. Used to build absolute URLs for LINE Flex images, which
+  // must be publicly reachable. Unset → slip replies fall back to plain text.
+  PUBLIC_BASE_URL: z
+    .string()
+    .url()
+    .transform((u) => u.replace(/\/+$/, ''))
+    .optional(),
+
   // Ops alerting: LINE userId that receives error alerts (the operator's own
   // id). Unset → errors are only logged, never pushed.
   ADMIN_LINE_USER_ID: z.string().optional(),

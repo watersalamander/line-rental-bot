@@ -75,9 +75,15 @@ function connectedMessage(unit: string, tenantName: string): messagingApi.Messag
   };
 }
 
+/** Full property name (no truncation) — for message text where there's no length cap. */
+function unitName(lease: Lease & { property: Property }): string {
+  return propertyLabel(lease.property) || lease.tenant_name;
+}
+
+/** Same name but capped to LINE's 20-char quick-reply *button* label limit. */
 function unitLabel(lease: Lease & { property: Property }): string {
-  const base = propertyLabel(lease.property) || lease.tenant_name;
-  return base.length > 20 ? `${base.slice(0, 19)}…` : base; // quick-reply label cap is 20 chars
+  const base = unitName(lease);
+  return base.length > 20 ? `${base.slice(0, 19)}…` : base;
 }
 
 /** Route a text command (message beginning with '/'). */
@@ -214,9 +220,9 @@ async function handleSetup(event: MessageEvent): Promise<void> {
     type: 'action',
     action: {
       type: 'postback',
-      label: unitLabel(lease),
+      label: unitLabel(lease), // button label — capped at LINE's 20-char limit
       data: `${BIND_PREFIX}${lease.id}`,
-      displayText: `เชื่อมกลุ่มนี้กับ ${unitLabel(lease)}`,
+      displayText: `เชื่อมกลุ่มนี้กับ ${unitName(lease)}`, // sent message — full name, no cap
     },
   }));
 

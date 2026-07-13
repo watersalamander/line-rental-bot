@@ -9,7 +9,7 @@ import type { Invoice, Landlord, Lease, Property } from '../db/types';
 
 // Avatar reminder card served from public/ (see @fastify/static). The ratio must
 // match the cropped image so the hero isn't distorted (see scripts/setup-cards.ts).
-const REMINDER_IMAGE_PATH = 'stickers/rent-reminder.png';
+const REMINDER_IMAGE_PATH = 'stickers/rent-reminder-v2.png'; // versioned: LINE caches hero images by URL
 const REMINDER_IMAGE_RATIO = '696:583';
 
 // ─────────────────────────────────────────────────────────────

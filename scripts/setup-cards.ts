@@ -22,9 +22,12 @@ const SRC = resolve(__dirname, '..', 'assets/avatar-source2.png');
 
 // Illustration-panel bounds as fractions of the source (left, top, right, bottom) —
 // inset just inside each panel's border so no frame edge or footer text is captured.
+// NOTE: filenames carry a version suffix. LINE caches Flex hero images by URL on
+// the client, so a re-crop MUST ship under a new filename or phones keep showing
+// the stale image. Bump the suffix (and the *_IMAGE_PATH constants) on every re-crop.
 const CARDS = [
-  { out: 'public/stickers/rent-reminder.png', bounds: { left: 0.028, top: 0.108, right: 0.481, bottom: 0.678 } },
-  { out: 'public/stickers/setup-connected.png', bounds: { left: 0.510, top: 0.108, right: 0.977, bottom: 0.675 } },
+  { out: 'public/stickers/rent-reminder-v2.png', bounds: { left: 0.028, top: 0.108, right: 0.481, bottom: 0.678 } },
+  { out: 'public/stickers/setup-connected-v2.png', bounds: { left: 0.510, top: 0.108, right: 0.977, bottom: 0.675 } },
 ];
 
 async function main(): Promise<void> {

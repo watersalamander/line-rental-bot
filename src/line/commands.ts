@@ -1,5 +1,5 @@
 import type { messagingApi, MessageEvent, PostbackEvent } from '@line/bot-sdk';
-import { replyMessages, replyText } from './client';
+import { pushMessage, replyMessages, replyText } from './client';
 import { getLandlordByLineUserId } from '../services/landlords';
 import { bindGroupToLease, GroupAlreadyBoundError, listUnboundActiveLeases } from '../services/leases';
 import { propertyLabel } from '../services/labels';
@@ -12,15 +12,23 @@ import {
   shiftPeriod,
   statusText,
 } from '../services/views';
-import { findReminderTargets, reminderMessage, sendGroupReminders } from '../services/reminders';
+import {
+  findReminderTargets,
+  sendGroupReminders,
+  sendGroupRemindersForLease,
+  type ReminderTarget,
+} from '../services/reminders';
 import { config } from '../config';
 import type { Lease, Property } from '../db/types';
 
 const BIND_PREFIX = 'bind:';
+// Owner's answer to the "send this reminder into the tenant group?" prompt.
+const REMIND_APPROVE_PREFIX = 'grem:'; // grem:<leaseId>
+const REMIND_DECLINE_PREFIX = 'grno:'; // grno:<leaseId>
 
 // Avatar "connected" card served from public/ (see @fastify/static). The ratio
 // must match the cropped image (see scripts/setup-cards.ts).
-const CONNECTED_IMAGE_PATH = 'stickers/setup-connected.png';
+const CONNECTED_IMAGE_PATH = 'stickers/setup-connected-v2.png'; // versioned: LINE caches hero images by URL
 const CONNECTED_IMAGE_RATIO = '718:580';
 
 /**
@@ -222,6 +230,16 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
   const replyToken = event.replyToken;
   if (replyToken === undefined) return;
   const data = event.postback.data;
+
+  if (data.startsWith(REMIND_APPROVE_PREFIX)) {
+    return handleReminderApprove(event, data.slice(REMIND_APPROVE_PREFIX.length));
+  }
+  if (data.startsWith(REMIND_DECLINE_PREFIX)) {
+    return replyText(
+      replyToken,
+      'รับทราบครับ ยังไม่ส่งแจ้งเตือน — พิมพ์ /remind หรือกดเมนูแจ้งเตือนค่าเช่าเมื่อต้องการส่งได้เลยครับ',
+    );
+  }
   if (!data.startsWith(BIND_PREFIX)) return;
 
   const leaseId = data.slice(BIND_PREFIX.length);
@@ -239,20 +257,78 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
     const p = lease.property;
     const unit = propertyLabel(p) || lease.tenant_name;
 
-    const messages: messagingApi.Message[] = [connectedMessage(unit, lease.tenant_name)];
+    // Confirm the binding in the group — but never post an overdue notice there
+    // unprompted. If a bill is already due/overdue, ask the OWNER privately first
+    // (landlord-in-the-loop, spec §10); they choose whether to nudge the tenants.
+    await replyMessages(replyToken, [connectedMessage(unit, lease.tenant_name)]);
 
-    // Welcome the freshly-bound group with the outstanding balance, if any invoice
-    // is already due/overdue for this lease (mirrors the /remind card).
     const target = (
       await findReminderTargets(bangkokToday(), { cadenceOnly: false, landlordId: landlord.id })
     ).find((t) => t.lease.id === lease.id);
-    if (target) messages.push(reminderMessage(target));
-
-    await replyMessages(replyToken, messages);
+    if (target && landlord.line_user_id) {
+      await pushMessage(landlord.line_user_id, reminderApprovalPrompt(target)).catch((e) =>
+        console.error('[setup] owner reminder prompt failed', e),
+      );
+    }
   } catch (err) {
     if (err instanceof GroupAlreadyBoundError) {
       return replyText(replyToken, 'กลุ่มนี้เชื่อมกับห้องอื่นอยู่แล้วครับ');
     }
     return replyText(replyToken, err instanceof Error ? err.message : 'เชื่อมกลุ่มนี้ไม่สำเร็จครับ');
   }
+}
+
+/**
+ * Private prompt to the owner asking whether to push a due/overdue reminder into
+ * the tenant group. Sent to the owner's 1:1 chat so tenants never see an overdue
+ * notice until the owner approves it.
+ */
+function reminderApprovalPrompt(t: ReminderTarget): messagingApi.TextMessage {
+  const timing = t.daysLate === 0 ? 'ครบกำหนดวันนี้' : `เลยกำหนดมา ${t.daysLate} วัน`;
+  const baht = `฿${Number(t.remaining).toLocaleString('en-US')}`;
+  return {
+    type: 'text',
+    text:
+      `🔔 ${t.unit} (ผู้เช่า: ${t.lease.tenant_name})\n` +
+      `มียอดค้าง ${baht} (${timing})\n` +
+      'ส่งแจ้งเตือนเข้ากลุ่มผู้เช่าเลยไหมครับ?',
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: 'ส่งเข้ากลุ่มเลย',
+            data: `${REMIND_APPROVE_PREFIX}${t.lease.id}`,
+            displayText: 'ส่งแจ้งเตือนเข้ากลุ่ม',
+          },
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: 'ยังไม่ส่ง',
+            data: `${REMIND_DECLINE_PREFIX}${t.lease.id}`,
+            displayText: 'ยังไม่ส่ง',
+          },
+        },
+      ],
+    },
+  };
+}
+
+/** Owner tapped "ส่งเข้ากลุ่มเลย" — push the reminder card into the tenant group. */
+async function handleReminderApprove(event: PostbackEvent, leaseId: string): Promise<void> {
+  const replyToken = event.replyToken;
+  if (replyToken === undefined) return;
+  if (event.source.type !== 'user') {
+    return replyText(replyToken, 'ยืนยันการส่งได้ในแชทส่วนตัวกับบอทเท่านั้นครับ');
+  }
+  const landlord = await getLandlordByLineUserId(event.source.userId);
+  if (!landlord) return replyText(replyToken, 'ยังไม่พบข้อมูลของคุณครับ');
+
+  const { sent, total } = await sendGroupRemindersForLease(landlord.id, leaseId);
+  if (total === 0) return replyText(replyToken, 'ยอดค้างถูกชำระแล้ว หรือไม่มีรายการที่ต้องแจ้งเตือนของห้องนี้ครับ');
+  if (sent === 0) return replyText(replyToken, 'วันนี้แจ้งเตือนห้องนี้ไปแล้วครับ');
+  return replyText(replyToken, '✓ ส่งแจ้งเตือนเข้ากลุ่มผู้เช่าแล้วครับ');
 }

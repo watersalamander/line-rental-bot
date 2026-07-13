@@ -3,15 +3,13 @@ import type { SlipData, SlipVerifier, VerifyOutcome } from './types';
 
 const ENDPOINT = 'https://developer.easyslip.com/api/v1/verify';
 
-// EasySlip error `message` codes that mean "this isn't a valid/verifiable slip"
-// (as opposed to a transient/auth error we should surface differently).
-const NOT_FOUND_CODES = new Set([
-  'slip_not_found',
-  'image_not_found',
-  'invalid_payload',
-  'qrcode_not_found',
-  'unsupported_bank',
-]);
+// No slip/QR could be found in the image → it probably isn't a slip at all.
+// Stay silent rather than nagging the group about a random photo.
+const NOT_A_SLIP_CODES = new Set(['qrcode_not_found', 'image_not_found', 'invalid_payload']);
+
+// It IS a slip, but we couldn't verify it (bank has no record, or the bank
+// isn't supported). Surface it so the owner can check.
+const NOT_FOUND_CODES = new Set(['slip_not_found', 'unsupported_bank']);
 
 interface EasySlipName {
   th?: string;
@@ -95,6 +93,7 @@ export class EasySlipVerifier implements SlipVerifier {
 
     const code = json?.message ?? `http_${res.status}`;
     if (code === 'duplicate_slip') return { ok: false, kind: 'duplicate', message: code, raw: json };
+    if (NOT_A_SLIP_CODES.has(code)) return { ok: false, kind: 'not_a_slip', message: code, raw: json };
     if (NOT_FOUND_CODES.has(code)) return { ok: false, kind: 'not_found', message: code, raw: json };
     return { ok: false, kind: 'error', message: code, raw: json };
   }

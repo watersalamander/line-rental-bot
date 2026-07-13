@@ -37,6 +37,12 @@ export async function handleSlipImage(event: MessageEvent): Promise<void> {
 
   if (!outcome.ok) {
     console.log(`[slip] verify FAILED kind=${outcome.kind} message=${outcome.message}`);
+    // Not a payment slip at all (random photo) — stay silent: no group reply,
+    // no landlord alert. Only genuine slip failures get surfaced.
+    if (outcome.kind === 'not_a_slip') {
+      console.log('[slip] image is not a payment slip — ignoring silently');
+      return;
+    }
     await handleVerifyFailure(event.replyToken, outcome.kind, landlord.line_user_id, property, lease);
     return;
   }

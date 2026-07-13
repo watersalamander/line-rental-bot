@@ -109,15 +109,32 @@ export class ClaudeVisionVerifier implements SlipVerifier {
     // Zero-width chars sneak into OCR'd refs and would defeat the dedupe index.
     const transRef = stripInvisible(fields.trans_ref).replace(/\s+/g, '');
 
-    // Can't reliably reconcile without a valid slip, an amount, and a dedupe ref.
-    if (!fields.is_slip || !(fields.amount > 0) || !transRef) {
-      return { ok: false, kind: 'not_found', message: 'not a readable slip', raw: fields };
-    }
-
     // Date: parse the verbatim printed text ourselves (models botch Buddhist-era
     // conversion and Thai month abbreviations); model ISO is only a fallback.
     const parsedDate = parseThaiSlipDate(fields.trans_datetime_text || '');
     const fallbackDate = normalizeModelIso(fields.trans_datetime || '');
+
+    // Decide whether the image is even a payment slip before deciding it's an
+    // unreadable one. A transaction ref is the strongest slip-specific signal
+    // (random photos don't carry a รหัสอ้างอิง); an amount paired with a date is
+    // the other giveaway. A lone number or lone date is NOT slip-like — those
+    // show up on receipts, price tags, screenshots, etc.
+    const hasRef = Boolean(transRef);
+    const hasAmount = fields.amount > 0;
+    const hasDate = Boolean(parsedDate || fallbackDate || fields.trans_datetime_text);
+    const looksLikeSlip = fields.is_slip || hasRef || (hasAmount && hasDate);
+
+    if (!looksLikeSlip) {
+      // Random photo — stay silent so the bot isn't noisy in the group.
+      return { ok: false, kind: 'not_a_slip', message: 'image is not a payment slip', raw: fields };
+    }
+
+    // It looks like a slip, but we can't reconcile without an amount and a
+    // dedupe ref — surface it so the owner can check (the tenant may have paid).
+    if (!hasAmount || !hasRef) {
+      return { ok: false, kind: 'not_found', message: 'slip fields incomplete', raw: fields };
+    }
+
     if (!parsedDate && fields.trans_datetime_text) {
       console.warn(`[slip] verbatim date unparsed: ${JSON.stringify(fields.trans_datetime_text)} — using model ISO`);
     }

@@ -278,6 +278,9 @@ export async function getHomeOverview(): Promise<HomeOverview> {
     };
   });
 
+  // Rented condos first; sort() is stable, so created_at order holds within each group.
+  properties.sort((a, b) => Number(b.tenant !== null) - Number(a.tenant !== null));
+
   return { poolBalance: round2(poolBalance), properties };
 }
 

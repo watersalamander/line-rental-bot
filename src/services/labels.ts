@@ -1,11 +1,11 @@
 /**
- * Human-readable condo label: property name followed by unit number, e.g.
- * "The Esse Asoke 333/23".
+ * Human-readable condo label: the condo name alone, e.g. "The Esse Asoke"
+ * (no unit number).
  *
  * Family/imported rows keep the real condo name in `name` with the unit in
- * `unit_no` (building is null) — those become "<name> <unit>". Legacy
+ * `unit_no` (building is null) — we return `name` and drop the unit. Legacy
  * LIFF-created rows fold the unit into `name` already ("XYZ 12/34"), so we
- * skip the join when the name already contains the unit to avoid repeating it.
+ * strip a trailing folded unit to show the condo name alone.
  *
  * Returns '' only when there's nothing to show, letting callers fall back
  * (e.g. to the tenant's name).
@@ -17,7 +17,10 @@ export function propertyLabel(p: {
 }): string {
   const name = p.name?.trim() ?? '';
   const unit = p.unit_no?.trim() ?? '';
-  if (name && unit) return name.includes(unit) ? name : `${name} ${unit}`;
+  // Legacy rows fold the unit into `name` ("XYZ 12/34") — strip it off.
+  if (name && unit && name.endsWith(unit)) {
+    return name.slice(0, -unit.length).trim() || name;
+  }
   const building = p.building?.trim() ?? '';
-  return name || [building, unit].filter(Boolean).join(' ') || unit;
+  return name || building;
 }

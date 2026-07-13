@@ -83,6 +83,9 @@ const JOBS: Job[] = [
       if (Number(today.slice(8, 10)) > 7) return;
       const period = shiftPeriod(currentPeriod(), -1);
       for (const l of await listLandlords()) {
+        // Skip BEFORE claiming the job key: an unlinked owner can still get
+        // this period's summary if they link LINE within the catch-up window.
+        if (!l.line_user_id) continue;
         if (!(await claimJobKey(`summary:${l.id}:${period}`))) continue;
         await ensureInvoicesForPeriod(l.id, period);
         const grid = await getUnitGrid(l.id, period);

@@ -44,13 +44,15 @@ export async function handleSlipImage(event: MessageEvent): Promise<void> {
   await replyText(event.replyToken, groupReply(result));
 
   const alert = landlordAlert(result);
-  if (alert) await pushText(landlord.line_user_id, alert).catch((e) => console.error('[slip] push failed', e));
+  if (alert && landlord.line_user_id) {
+    await pushText(landlord.line_user_id, alert).catch((e) => console.error('[slip] push failed', e));
+  }
 }
 
 async function handleVerifyFailure(
   replyToken: string,
   kind: 'duplicate' | 'not_found' | 'error',
-  landlordUserId: string,
+  landlordUserId: string | null, // null = owner hasn't chatted with the bot yet — no DM possible
   property: { building: string | null; unit_no: string | null; name: string | null },
   lease: { tenant_name: string },
 ): Promise<void> {
@@ -58,12 +60,14 @@ async function handleVerifyFailure(
 
   if (kind === 'duplicate') {
     await replyText(replyToken, 'สลิปนี้เคยส่งมาแล้วนะครับ'); // "this slip was already submitted"
-    await pushText(landlordUserId, `⚠️ ${unit}: สลิปซ้ำถูกส่งเข้ามา`).catch(() => {});
+    if (landlordUserId) await pushText(landlordUserId, `⚠️ ${unit}: สลิปซ้ำถูกส่งเข้ามา`).catch(() => {});
     return;
   }
   // not_found / error → don't auto-confirm; flag the owner (spec §5.2).
   await replyText(replyToken, 'ยืนยันสลิปไม่สำเร็จ ผมแจ้งเจ้าของห้องให้ตรวจสอบแล้วนะครับ');
-  await pushText(landlordUserId, `⚠️ ${unit}: ตรวจสอบสลิปไม่สำเร็จ มีสลิปที่ยืนยันไม่ได้ในกลุ่ม โปรดตรวจสอบ`).catch(() => {});
+  if (landlordUserId) {
+    await pushText(landlordUserId, `⚠️ ${unit}: ตรวจสอบสลิปไม่สำเร็จ มีสลิปที่ยืนยันไม่ได้ในกลุ่ม โปรดตรวจสอบ`).catch(() => {});
+  }
 }
 
 /** In-group reply to the tenant (free reply message). */

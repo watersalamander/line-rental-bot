@@ -34,6 +34,16 @@ export async function pushText(userId: string, text: string): Promise<void> {
   await lineClient.pushMessage({ to: userId, messages: [{ type: 'text', text }] });
 }
 
+/** Resolve a 1:1 user's LINE display name (requires the user to have added the bot). */
+export async function getUserName(userId: string): Promise<string | null> {
+  try {
+    const profile = await lineClient.getProfile(userId);
+    return profile.displayName ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve a group member's display name (used later for sender ↔ payer matching). */
 export async function getGroupMemberName(groupId: string, userId: string): Promise<string | null> {
   try {

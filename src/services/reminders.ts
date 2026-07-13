@@ -113,6 +113,30 @@ export async function sendGroupReminders(
   return { sent, total: targets.length };
 }
 
+/**
+ * Rich-menu variant of /remind: nudge a single lease's group only.
+ * Shares the per-invoice-per-day claim with sendGroupReminders, so the two
+ * paths dedupe against each other. total=0 means the lease has no unpaid
+ * due/overdue invoice (paid in the meantime, or never overdue).
+ */
+export async function sendGroupRemindersForLease(
+  landlordId: string,
+  leaseId: string,
+  today = bangkokToday(),
+): Promise<{ sent: number; total: number }> {
+  const targets = (await findReminderTargets(today, { cadenceOnly: false, landlordId })).filter(
+    (t) => t.lease.id === leaseId,
+  );
+  let sent = 0;
+  for (const t of targets) {
+    if (!(await claimJobKey(`remind:${t.invoice.id}:${today}`))) continue;
+    await pushText(t.lease.line_group_id as string, reminderText(t));
+    console.log(`[remind] menu sent → ${t.unit} (${t.invoice.period_month}, ${t.daysLate}d late)`);
+    sent++;
+  }
+  return { sent, total: targets.length };
+}
+
 /** Cron half: DM each landlord a digest on cadence days (dedupe per landlord per day). */
 export async function sendReminderDigests(today: string): Promise<void> {
   const targets = await findReminderTargets(today, { cadenceOnly: true });
@@ -123,9 +147,11 @@ export async function sendReminderDigests(today: string): Promise<void> {
     byLandlord.set(t.landlord.id, list);
   }
   for (const [landlordId, list] of byLandlord) {
-    if (!(await claimJobKey(`digest:${landlordId}:${today}`))) continue;
     const first = list[0];
-    if (!first) continue;
+    // No LINE id yet → skip before claiming, so the digest isn't burned for
+    // an owner who links LINE later the same day.
+    if (!first || !first.landlord.line_user_id) continue;
+    if (!(await claimJobKey(`digest:${landlordId}:${today}`))) continue;
     await pushText(first.landlord.line_user_id, digestText(list, today));
     console.log(`[cron] digest → landlord ${landlordId} (${list.length} units)`);
   }

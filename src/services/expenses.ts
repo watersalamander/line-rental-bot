@@ -12,12 +12,22 @@ import type { Property } from '../db/types';
 export const EXPENSE_CATEGORIES = ['common_fee', 'maintenance', 'utilities', 'tax', 'agency', 'other'] as const;
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
-export const CATEGORY_TH: Record<ExpenseCategory, string> = {
+// Manual income (direction 'in') — rent paid in cash / transferred without a
+// slip, deposits received. Categories must stay inside the transactions
+// category check constraint (migration 0004).
+export const INCOME_CATEGORIES = ['rent', 'deposit', 'other'] as const;
+export type IncomeCategory = (typeof INCOME_CATEGORIES)[number];
+
+export type TxnCategory = ExpenseCategory | IncomeCategory;
+
+export const CATEGORY_TH: Record<TxnCategory, string> = {
   common_fee: 'ค่าส่วนกลาง',
   maintenance: 'ซ่อมบำรุง',
   utilities: 'ค่าน้ำ/ไฟ',
   tax: 'ภาษี',
   agency: 'ค่านายหน้า',
+  rent: 'ค่าเช่า',
+  deposit: 'เงินมัดจำ',
   other: 'อื่นๆ',
 };
 
@@ -55,6 +65,7 @@ export interface ExpenseRow {
   id: string;
   amount: number;
   category: string;
+  direction: 'in' | 'out';
   property_id: string | null;
   property: Property | null;
 }
@@ -77,7 +88,7 @@ export async function createExpense(input: CreateExpenseInput): Promise<ExpenseR
       verify_status: input.source === 'slip' ? 'verified' : 'unverified',
       raw_slip_json: input.raw ?? null,
     })
-    .select('id, amount, category, property_id')
+    .select('id, amount, category, direction, property_id')
     .single();
 
   if (error) {
@@ -110,9 +121,22 @@ export async function setExpenseProperty(
 export async function setExpenseCategory(
   txnId: string,
   landlordId: string,
-  category: ExpenseCategory,
+  category: TxnCategory,
 ): Promise<ExpenseRow> {
   return updateExpense(txnId, landlordId, { category });
+}
+
+/**
+ * Flip a freshly captured transaction between expense and income (the
+ * direction quick-reply step). Flipping resets the category to 'other' so a
+ * stale expense default never labels an income row.
+ */
+export async function setTransactionDirection(
+  txnId: string,
+  landlordId: string,
+  direction: 'in' | 'out',
+): Promise<ExpenseRow> {
+  return updateExpense(txnId, landlordId, { direction, category: 'other' });
 }
 
 async function updateExpense(
@@ -125,11 +149,10 @@ async function updateExpense(
     .update(patch)
     .eq('id', txnId)
     .eq('landlord_id', landlordId)
-    .eq('direction', 'out')
-    .select('id, amount, category, property_id, property:properties(*)')
+    .select('id, amount, category, direction, property_id, property:properties(*)')
     .maybeSingle();
   if (error) throw new Error(`updateExpense: ${error.message}`);
-  if (!data) throw new Error('ไม่พบรายการรายจ่ายครับ');
+  if (!data) throw new Error('ไม่พบรายการที่บันทึกไว้ครับ');
   const row = data as unknown as ExpenseRow;
   return { ...row, amount: Number(row.amount) };
 }

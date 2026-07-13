@@ -6,7 +6,7 @@ export type InvoiceStatus = 'open' | 'partial' | 'paid' | 'overdue';
 
 export interface Landlord {
   id: string;
-  line_user_id: string;
+  line_user_id: string | null; // null until the member first messages the bot (0003)
   display_name: string | null;
   created_at: string;
 }

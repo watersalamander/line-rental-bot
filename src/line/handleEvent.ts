@@ -2,6 +2,8 @@ import type { WebhookEvent } from '@line/bot-sdk';
 import { handleCommand, handlePostback } from './commands';
 import { handleSlipImage } from './slipHandler';
 import { handleExpenseImage, handleExpensePostback, handleExpenseText, isExpensePostback } from './expenseHandler';
+import { handleLinkPostback, interceptUnknownUser, isLinkPostback } from './linkHandler';
+import { handleMenuPostback, isMenuPostback } from './menuHandler';
 
 /**
  * Top-level event dispatch.
@@ -19,12 +21,22 @@ export async function handleEvent(event: WebhookEvent): Promise<void> {
   console.log(`[event] ${event.type} from ${scope}`);
 
   if (event.type === 'postback') {
-    if (isExpensePostback(event.postback.data)) await handleExpensePostback(event);
+    if (isLinkPostback(event.postback.data)) await handleLinkPostback(event);
+    else if (isExpensePostback(event.postback.data)) await handleExpensePostback(event);
+    else if (isMenuPostback(event.postback.data)) await handleMenuPostback(event);
     else await handlePostback(event);
     return;
   }
 
   if (event.type !== 'message' || event.replyToken === undefined) return;
+
+  // 1:1 message from a LINE account with no landlord row → identity picker
+  // ("คุณคือใคร?") before any command/expense handling, so an unlinked family
+  // member never gets a duplicate profile. Groups are tenant territory and
+  // never see the picker.
+  if (source.type === 'user' && (event.message.type === 'text' || event.message.type === 'image')) {
+    if (await interceptUnknownUser(event)) return;
+  }
 
   switch (event.message.type) {
     case 'text': {

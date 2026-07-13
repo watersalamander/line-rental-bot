@@ -216,15 +216,23 @@ export interface CashflowMonth {
   net: number;
 }
 
-/** Monthly in/out/net across the whole portfolio for the `months` ending at `endPeriod`. */
-export async function getCashflow(landlordId: string, endPeriod: string, months = 6): Promise<CashflowMonth[]> {
+/**
+ * Monthly in/out/net for the `months` ending at `endPeriod`.
+ * `landlordId` scopes to one owner; null = the whole family (incl. pool rows).
+ */
+export async function getCashflow(
+  landlordId: string | null,
+  endPeriod: string,
+  months = 6,
+): Promise<CashflowMonth[]> {
   const startPeriod = shiftPeriod(endPeriod, -(months - 1));
-  const { data, error } = await db
+  let query = db
     .from('transactions')
     .select('direction, amount, txn_datetime')
-    .eq('landlord_id', landlordId)
     .gte('txn_datetime', periodStartIso(startPeriod))
     .lt('txn_datetime', periodStartIso(shiftPeriod(endPeriod, 1)));
+  if (landlordId !== null) query = query.eq('landlord_id', landlordId);
+  const { data, error } = await query;
   if (error) throw new Error(`getCashflow: ${error.message}`);
 
   const byMonth = new Map<string, CashflowMonth>();
@@ -244,6 +252,154 @@ export async function getCashflow(landlordId: string, endPeriod: string, months 
     b.net = round2(b.income - b.expense);
   }
   return [...byMonth.values()];
+}
+
+// ── Family overview (pooled + per-condo) ──────────────────────
+// The family pools every baht of rent into one common fund, so the
+// pooled view is an aggregate over ALL owners' transactions plus
+// pool-level rows (landlord_id null — e.g. family spending).
+
+export interface FamilyTxn {
+  date: string; // 'YYYY-MM-DD' in Asia/Bangkok
+  direction: 'in' | 'out';
+  category: string;
+  amount: number;
+  note: string | null;
+}
+
+export interface FamilyPropertyRow {
+  propertyId: string;
+  name: string;
+  owner: string;
+  income: number; // this period
+  expense: number;
+  net: number;
+  txns: FamilyTxn[];
+}
+
+export interface FamilyOwnerRow {
+  name: string;
+  income: number;
+  expense: number;
+  net: number;
+}
+
+export interface FamilyOverview {
+  period: string;
+  totals: { income: number; expense: number; net: number; poolBalance: number };
+  owners: FamilyOwnerRow[]; // owners active this period; 'กองกลาง' = pool rows
+  properties: FamilyPropertyRow[]; // every condo, active or not
+  poolTxns: FamilyTxn[]; // pool-level rows this period
+  cashflow: CashflowMonth[];
+}
+
+/** Full YYYY-MM-DD Bangkok date of a timestamptz. */
+function bangkokDate(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date(iso));
+}
+
+const POOL_OWNER = 'กองกลาง';
+
+export async function getFamilyOverview(period: string): Promise<FamilyOverview> {
+  interface TxnRow {
+    landlord_id: string | null;
+    property_id: string | null;
+    direction: 'in' | 'out';
+    category: string;
+    amount: number;
+    txn_datetime: string;
+    note: string | null;
+  }
+
+  const [landlordsRes, propertiesRes, periodTxnsRes, allTxnsRes, cashflow] = await Promise.all([
+    db.from('landlords').select('id, display_name'),
+    db.from('properties').select('id, name, building, unit_no, landlord_id').order('created_at'),
+    db
+      .from('transactions')
+      .select('landlord_id, property_id, direction, category, amount, txn_datetime, note')
+      .gte('txn_datetime', periodStartIso(period))
+      .lt('txn_datetime', periodStartIso(shiftPeriod(period, 1)))
+      .order('txn_datetime'),
+    // Pool balance is lifetime net: every baht in minus every baht out.
+    db.from('transactions').select('direction, amount'),
+    getCashflow(null, period, 6),
+  ]);
+  if (landlordsRes.error) throw new Error(`familyOverview/landlords: ${landlordsRes.error.message}`);
+  if (propertiesRes.error) throw new Error(`familyOverview/properties: ${propertiesRes.error.message}`);
+  if (periodTxnsRes.error) throw new Error(`familyOverview/txns: ${periodTxnsRes.error.message}`);
+  if (allTxnsRes.error) throw new Error(`familyOverview/allTxns: ${allTxnsRes.error.message}`);
+
+  const ownerName = new Map<string, string>(
+    (landlordsRes.data ?? []).map((l) => [l.id as string, (l.display_name as string | null) ?? '(ไม่มีชื่อ)']),
+  );
+
+  let poolBalance = 0;
+  for (const t of (allTxnsRes.data ?? []) as Array<{ direction: 'in' | 'out'; amount: number }>) {
+    poolBalance += t.direction === 'in' ? Number(t.amount) : -Number(t.amount);
+  }
+
+  const toFamilyTxn = (t: TxnRow): FamilyTxn => ({
+    date: bangkokDate(t.txn_datetime),
+    direction: t.direction,
+    category: t.category,
+    amount: Number(t.amount),
+    note: t.note,
+  });
+
+  const totals = { income: 0, expense: 0, net: 0, poolBalance: round2(poolBalance) };
+  const ownerAgg = new Map<string, FamilyOwnerRow>();
+  const propAgg = new Map<string, { income: number; expense: number; txns: FamilyTxn[] }>();
+  const poolTxns: FamilyTxn[] = [];
+
+  for (const t of (periodTxnsRes.data ?? []) as TxnRow[]) {
+    const amount = Number(t.amount);
+    if (t.direction === 'in') totals.income += amount;
+    else totals.expense += amount;
+
+    const owner = t.landlord_id ? (ownerName.get(t.landlord_id) ?? '(ไม่มีชื่อ)') : POOL_OWNER;
+    const o = ownerAgg.get(owner) ?? { name: owner, income: 0, expense: 0, net: 0 };
+    if (t.direction === 'in') o.income += amount;
+    else o.expense += amount;
+    ownerAgg.set(owner, o);
+
+    if (t.property_id) {
+      const p = propAgg.get(t.property_id) ?? { income: 0, expense: 0, txns: [] };
+      if (t.direction === 'in') p.income += amount;
+      else p.expense += amount;
+      p.txns.push(toFamilyTxn(t));
+      propAgg.set(t.property_id, p);
+    } else if (!t.landlord_id) {
+      poolTxns.push(toFamilyTxn(t));
+    }
+  }
+  totals.income = round2(totals.income);
+  totals.expense = round2(totals.expense);
+  totals.net = round2(totals.income - totals.expense);
+
+  const owners = [...ownerAgg.values()]
+    .map((o) => ({ ...o, income: round2(o.income), expense: round2(o.expense), net: round2(o.income - o.expense) }))
+    .sort((a, b) => b.net - a.net);
+
+  const properties = ((propertiesRes.data ?? []) as Array<{
+    id: string;
+    name: string | null;
+    building: string | null;
+    unit_no: string | null;
+    landlord_id: string;
+  }>).map((p): FamilyPropertyRow => {
+    const agg = propAgg.get(p.id) ?? { income: 0, expense: 0, txns: [] };
+    return {
+      propertyId: p.id,
+      name: p.name || [p.building, p.unit_no].filter(Boolean).join(' ') || '(ไม่มีชื่อ)',
+      owner: ownerName.get(p.landlord_id) ?? '(ไม่มีชื่อ)',
+      income: round2(agg.income),
+      expense: round2(agg.expense),
+      net: round2(agg.income - agg.expense),
+      txns: agg.txns,
+    };
+  });
+
+  return { period, totals, owners, properties, poolTxns, cashflow };
 }
 
 // ── Upcoming lease expiries ────────────────────────────────────

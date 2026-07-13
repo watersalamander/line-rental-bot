@@ -16,6 +16,11 @@
     .status { text-align:center; color:var(--muted); padding:40px 0; }
     .hidden { display:none; }
 
+    /* scope tabs */
+    .tabs { display:flex; gap:6px; background:#eceff2; border-radius:12px; padding:4px; margin-bottom:12px; }
+    .tabs button { flex:1; border:0; background:transparent; border-radius:9px; padding:8px 0; font-size:14px; font-weight:700; color:var(--muted); }
+    .tabs button.active { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
     /* month nav */
     .nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
     .nav button { border:1px solid var(--line); background:#fff; border-radius:10px; padding:8px 14px; font-size:16px; color:var(--ink); }
@@ -27,6 +32,8 @@
     .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
     .tile .k { font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
     .tile .v { font-size:18px; font-weight:700; margin-top:2px; }
+    .tile .v.pos { color:#027a48; }
+    .tile .v.neg { color:var(--danger); }
 
     /* unit rows */
     .unit { display:flex; justify-content:space-between; gap:8px; }
@@ -58,6 +65,27 @@
     .exp .d.soon { color:var(--warn); }
     .exp .d.over { color:var(--danger); }
     .empty { color:var(--muted); font-size:13px; }
+
+    /* family: transaction lists inside property cards */
+    details.txns { margin-top:8px; }
+    details.txns summary { font-size:12px; color:var(--info); font-weight:600; cursor:pointer; list-style:none; }
+    details.txns summary::before { content:'▸ '; }
+    details.txns[open] summary::before { content:'▾ '; }
+    .txn { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:5px 0; border-bottom:1px solid var(--line); }
+    .txn:last-child { border-bottom:0; }
+    .txn .meta { color:var(--muted); }
+    .txn .amt { font-weight:700; white-space:nowrap; }
+    .txn .amt.in { color:#027a48; }
+    .txn .amt.out { color:var(--danger); }
+
+    /* family: owner breakdown */
+    .owner { display:flex; justify-content:space-between; font-size:14px; padding:6px 0; border-bottom:1px solid var(--line); }
+    .owner:last-child { border-bottom:0; }
+    .owner .n { font-weight:700; }
+    .owner .io { color:var(--muted); font-size:12px; }
+    .owner .net { font-weight:700; }
+    .owner .net.pos { color:#027a48; }
+    .owner .net.neg { color:var(--danger); }
   </style>
 </head>
 <body>
@@ -67,22 +95,47 @@
     <div id="app" class="hidden">
       <h1>📈 แดชบอร์ด</h1>
 
+      <div class="tabs">
+        <button id="tabFamily" type="button" class="active">ครอบครัว</button>
+        <button id="tabMine" type="button">ของฉัน</button>
+      </div>
+
       <div class="nav">
         <button id="prevBtn" type="button">‹</button>
         <div class="period" id="periodLabel"></div>
         <button id="nextBtn" type="button">›</button>
       </div>
 
-      <div class="tiles" id="tiles"></div>
+      <!-- ── Family (pooled) view ─────────────────────────── -->
+      <div id="familyView">
+        <div class="tiles" id="fTiles"></div>
 
-      <h2>ห้อง — การกระทบยอด</h2>
-      <div id="units"></div>
+        <h2>คอนโดแต่ละห้อง</h2>
+        <div id="fProperties"></div>
 
-      <h2>กระแสเงินสด (6 เดือนล่าสุด)</h2>
-      <div class="card" id="cashflow"></div>
+        <h2>รายจ่ายกองกลาง (เดือนนี้)</h2>
+        <div class="card" id="fPool"></div>
 
-      <h2>สัญญาใกล้หมดอายุ (90 วันข้างหน้า)</h2>
-      <div class="card" id="expiries"></div>
+        <h2>แยกตามเจ้าของ (เดือนนี้)</h2>
+        <div class="card" id="fOwners"></div>
+
+        <h2>กระแสเงินสดรวมครอบครัว (6 เดือนล่าสุด)</h2>
+        <div class="card" id="fCashflow"></div>
+      </div>
+
+      <!-- ── Personal (reconciliation) view ────────────────── -->
+      <div id="mineView" class="hidden">
+        <div class="tiles" id="tiles"></div>
+
+        <h2>ห้อง — การกระทบยอด</h2>
+        <div id="units"></div>
+
+        <h2>กระแสเงินสด (6 เดือนล่าสุด)</h2>
+        <div class="card" id="cashflow"></div>
+
+        <h2>สัญญาใกล้หมดอายุ (90 วันข้างหน้า)</h2>
+        <div class="card" id="expiries"></div>
+      </div>
     </div>
   </div>
 
@@ -90,12 +143,19 @@
     let idToken = null;
     let period = null;       // currently shown 'YYYY-MM'
     let nowPeriod = null;    // server's current period — upper bound for ›
+    let tab = 'family';      // 'family' | 'mine'
 
     const $ = (id) => document.getElementById(id);
     const baht = (n) => '฿' + Number(n).toLocaleString('en-US');
+    const bahtSigned = (n) => (n < 0 ? '−' : n > 0 ? '+' : '') + baht(Math.abs(n));
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
     const STATUS_LABEL = { paid:'ชำระครบ', partial:'ชำระบางส่วน', missing:'ยังไม่ชำระ', overpaid:'ชำระเกิน' };
+    const CATEGORY_TH = {
+      rent:'ค่าเช่า', common_fee:'ค่าส่วนกลาง', agency:'ค่านายหน้า', maintenance:'ซ่อมบำรุง',
+      tax:'ภาษี/ค่าโอน', utilities:'ค่าน้ำ/ไฟ/เน็ต', insurance:'ประกัน', deposit:'เงินมัดจำ', other:'อื่นๆ',
+    };
+    const catTh = (c) => CATEGORY_TH[c] || c;
 
     function shiftPeriod(p, delta) {
       const [y, m] = p.split('-').map(Number);
@@ -120,19 +180,77 @@
     }
 
     async function load(p) {
-      const url = '/api/dashboard' + (p ? '?period=' + encodeURIComponent(p) : '');
+      const endpoint = tab === 'family' ? '/api/family' : '/api/dashboard';
+      const url = endpoint + (p ? '?period=' + encodeURIComponent(p) : '');
       const res = await fetch(url, { headers: { Authorization: 'Bearer ' + idToken } });
-      if (!res.ok) throw new Error('โหลดแดชบอร์ดไม่สำเร็จ (' + res.status + ')');
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error((body && body.error) || 'โหลดแดชบอร์ดไม่สำเร็จ (' + res.status + ')');
+      }
       const data = await res.json();
       period = data.period;
       nowPeriod = data.currentPeriod;
-      render(data);
-    }
-
-    function render(d) {
       $('periodLabel').textContent = period;
       $('nextBtn').disabled = period >= nowPeriod;
+      if (tab === 'family') renderFamily(data);
+      else renderMine(data);
+    }
 
+    // ── Family (pooled) rendering ────────────────────────────
+    function txnList(txns) {
+      return txns.map((t) =>
+        '<div class="txn">' +
+          '<div><div>' + esc(catTh(t.category)) + (t.note ? ' — ' + esc(t.note) : '') + '</div>' +
+          '<div class="meta">' + esc(t.date) + '</div></div>' +
+          '<div class="amt ' + t.direction + '">' + (t.direction === 'in' ? '+' : '−') + baht(t.amount) + '</div>' +
+        '</div>'
+      ).join('');
+    }
+
+    function renderFamily(d) {
+      const t = d.totals;
+      $('fTiles').innerHTML = [
+        ['รายรับเดือนนี้', baht(t.income), ''],
+        ['รายจ่ายเดือนนี้', baht(t.expense), ''],
+        ['สุทธิเดือนนี้', bahtSigned(t.net), t.net >= 0 ? 'pos' : 'neg'],
+        ['เงินกองกลางสะสม', baht(t.poolBalance), ''],
+      ].map(([k, v, cls]) => '<div class="tile"><div class="k">' + k + '</div><div class="v ' + cls + '">' + v + '</div></div>').join('');
+
+      $('fProperties').innerHTML = d.properties.map((p) => {
+        const sub = p.income === 0 && p.expense === 0
+          ? '<span class="empty">ไม่มีรายการเดือนนี้</span>'
+          : 'รับ ' + baht(p.income) + ' · จ่าย ' + baht(p.expense);
+        const net = bahtSigned(p.net);
+        return '<div class="card">' +
+          '<div class="unit">' +
+            '<div><div class="name">' + esc(p.name) + '</div><div class="tenant">เจ้าของ: ' + esc(p.owner) + '</div></div>' +
+            '<div><div class="amount">' + net + '</div><div class="sub">' + sub + '</div></div>' +
+          '</div>' +
+          (p.txns.length
+            ? '<details class="txns"><summary>รายการเดือนนี้ (' + p.txns.length + ')</summary>' + txnList(p.txns) + '</details>'
+            : '') +
+        '</div>';
+      }).join('') || '<div class="card empty">ยังไม่มีคอนโดในระบบ</div>';
+
+      $('fPool').innerHTML = d.poolTxns.length
+        ? txnList(d.poolTxns)
+        : '<div class="empty">ไม่มีรายจ่ายกองกลางในเดือนนี้</div>';
+
+      $('fOwners').innerHTML = d.owners.length
+        ? d.owners.map((o) =>
+            '<div class="owner">' +
+              '<div><div class="n">' + esc(o.name) + '</div>' +
+              '<div class="io">รับ ' + baht(o.income) + ' · จ่าย ' + baht(o.expense) + '</div></div>' +
+              '<div class="net ' + (o.net >= 0 ? 'pos' : 'neg') + '">' + bahtSigned(o.net) + '</div>' +
+            '</div>'
+          ).join('')
+        : '<div class="empty">ไม่มีรายการในเดือนนี้</div>';
+
+      $('fCashflow').innerHTML = cashflowBars(d.cashflow);
+    }
+
+    // ── Personal (reconciliation) rendering ──────────────────
+    function renderMine(d) {
       const t = d.totals;
       $('tiles').innerHTML = [
         ['ยอดเรียกเก็บ', baht(t.due)],
@@ -160,14 +278,7 @@
         }).join('');
       }
 
-      // cashflow bars, scaled to the biggest month
-      const max = Math.max(1, ...d.cashflow.map((m) => Math.max(m.income, m.expense)));
-      $('cashflow').innerHTML = d.cashflow.map((m) =>
-        '<div class="cf-row"><div class="m">' + m.month + '</div>' +
-        '<div class="bar"><div class="in" style="width:' + (m.income / max * 100) + '%"></div>' +
-        '<div class="out" style="width:' + (m.expense / max * 100) + '%"></div></div>' +
-        '<div class="amt">' + baht(m.net) + '</div></div>'
-      ).join('') || '<div class="empty">ยังไม่มีรายการเดินบัญชี</div>';
+      $('cashflow').innerHTML = cashflowBars(d.cashflow);
 
       // expiries
       $('expiries').innerHTML = d.expiries.length
@@ -180,6 +291,29 @@
         : '<div class="empty">ไม่มีสัญญาที่จะหมดอายุใน 90 วันข้างหน้า</div>';
     }
 
+    // cashflow bars, scaled to the biggest month (shared by both tabs)
+    function cashflowBars(cashflow) {
+      const max = Math.max(1, ...cashflow.map((m) => Math.max(m.income, m.expense)));
+      return cashflow.map((m) =>
+        '<div class="cf-row"><div class="m">' + m.month + '</div>' +
+        '<div class="bar"><div class="in" style="width:' + (m.income / max * 100) + '%"></div>' +
+        '<div class="out" style="width:' + (m.expense / max * 100) + '%"></div></div>' +
+        '<div class="amt">' + bahtSigned(m.net) + '</div></div>'
+      ).join('') || '<div class="empty">ยังไม่มีรายการเดินบัญชี</div>';
+    }
+
+    function setTab(next) {
+      if (tab === next) return;
+      tab = next;
+      $('tabFamily').classList.toggle('active', tab === 'family');
+      $('tabMine').classList.toggle('active', tab === 'mine');
+      $('familyView').classList.toggle('hidden', tab !== 'family');
+      $('mineView').classList.toggle('hidden', tab !== 'mine');
+      load(period).catch(showErr);
+    }
+
+    $('tabFamily').addEventListener('click', () => setTab('family'));
+    $('tabMine').addEventListener('click', () => setTab('mine'));
     $('prevBtn').addEventListener('click', () => load(shiftPeriod(period, -1)).catch(showErr));
     $('nextBtn').addEventListener('click', () => load(shiftPeriod(period, 1)).catch(showErr));
     function showErr(e) { alert(e && e.message ? e.message : e); }

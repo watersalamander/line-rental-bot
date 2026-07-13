@@ -2,20 +2,25 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config';
 import { verifyIdToken } from '../liff/verify';
-import { upsertLandlord } from '../services/landlords';
+import { getLandlordByLineUserId, listUnlinkedLandlords, upsertLandlord } from '../services/landlords';
 import { createLease, listProperties } from '../services/leases';
 import {
   currentPeriod,
   ensureInvoicesForPeriod,
   getCashflow,
+  getFamilyOverview,
   getUnitGrid,
   getUpcomingExpiries,
   isPeriod,
 } from '../services/views';
 
-// Authenticate a LIFF request via `Authorization: Bearer <id_token>`, upserting
-// the landlord. Throws AuthError (→ 401) on any problem.
+// Authenticate a LIFF request via `Authorization: Bearer <id_token>`.
+// Throws AuthError (→ 401) on any problem, NeedsLinkError (→ 403) when the
+// LINE account is unknown but unlinked family rows exist — creating a fresh
+// profile then would duplicate an imported family member, so the user must
+// pick their name in the bot's 1:1 chat first (linkHandler).
 class AuthError extends Error {}
+class NeedsLinkError extends Error {}
 
 async function authLandlord(request: FastifyRequest): Promise<{ landlordId: string }> {
   const header = request.headers['authorization'];
@@ -29,8 +34,29 @@ async function authLandlord(request: FastifyRequest): Promise<{ landlordId: stri
   } catch (err) {
     throw new AuthError(err instanceof Error ? err.message : 'ยืนยัน token ไม่สำเร็จ');
   }
+
+  const existing = await getLandlordByLineUserId(verified.userId);
+  if (existing) return { landlordId: existing.id };
+
+  if ((await listUnlinkedLandlords()).length > 0) {
+    throw new NeedsLinkError(
+      'ยังไม่ได้ผูกบัญชี LINE กับรายชื่อครอบครัว — ทักแชทส่วนตัวกับบอท แล้วแตะเลือกชื่อของคุณก่อนครับ',
+    );
+  }
   const landlord = await upsertLandlord(verified.userId, verified.name);
   return { landlordId: landlord.id };
+}
+
+/** Shared auth wrapper: sends the right error response, or returns the landlord id. */
+async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
+  try {
+    const { landlordId } = await authLandlord(request);
+    return landlordId;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต';
+    await reply.code(err instanceof NeedsLinkError ? 403 : 401).send({ error: message });
+    return null;
+  }
 }
 
 const leaseBodySchema = z
@@ -61,23 +87,15 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/properties', async (request, reply) => {
-    let landlordId: string;
-    try {
-      ({ landlordId } = await authLandlord(request));
-    } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต' });
-    }
+    const landlordId = await requireAuth(request, reply);
+    if (!landlordId) return reply;
     return { properties: await listProperties(landlordId) };
   });
 
   // Phase 3 — read-only dashboard payload: unit grid + cashflow + expiries.
   app.get('/api/dashboard', async (request, reply) => {
-    let landlordId: string;
-    try {
-      ({ landlordId } = await authLandlord(request));
-    } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต' });
-    }
+    const landlordId = await requireAuth(request, reply);
+    if (!landlordId) return reply;
 
     const q = request.query as { period?: string };
     const period = q.period && isPeriod(q.period) ? q.period : currentPeriod();
@@ -91,13 +109,19 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     return { ...grid, cashflow, expiries, currentPeriod: currentPeriod() };
   });
 
+  // Family view: pooled totals + per-condo breakdown across ALL owners.
+  // Internal family app — any authenticated member sees the whole picture.
+  app.get('/api/family', async (request, reply) => {
+    if (!(await requireAuth(request, reply))) return reply;
+
+    const q = request.query as { period?: string };
+    const period = q.period && isPeriod(q.period) ? q.period : currentPeriod();
+    return { ...(await getFamilyOverview(period)), currentPeriod: currentPeriod() };
+  });
+
   app.post('/api/leases', async (request, reply) => {
-    let landlordId: string;
-    try {
-      ({ landlordId } = await authLandlord(request));
-    } catch (err) {
-      return reply.code(401).send({ error: err instanceof Error ? err.message : 'ไม่ได้รับอนุญาต' });
-    }
+    const landlordId = await requireAuth(request, reply);
+    if (!landlordId) return reply;
 
     const parsed = leaseBodySchema.safeParse(request.body);
     if (!parsed.success) {

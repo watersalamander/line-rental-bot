@@ -4,6 +4,7 @@ import { getLandlordByLineUserId } from '../services/landlords';
 import { bindGroupToLease, GroupAlreadyBoundError, listUnboundActiveLeases } from '../services/leases';
 import { propertyLabel } from '../services/labels';
 import {
+  bangkokToday,
   currentPeriod,
   ensureInvoicesForPeriod,
   getUnitGrid,
@@ -11,11 +12,60 @@ import {
   shiftPeriod,
   statusText,
 } from '../services/views';
-import { sendGroupReminders } from '../services/reminders';
+import { findReminderTargets, reminderMessage, sendGroupReminders } from '../services/reminders';
 import { config } from '../config';
 import type { Lease, Property } from '../db/types';
 
 const BIND_PREFIX = 'bind:';
+
+// Avatar "connected" card served from public/ (see @fastify/static). The ratio
+// must match the cropped image (see scripts/setup-cards.ts).
+const CONNECTED_IMAGE_PATH = 'stickers/setup-connected.png';
+const CONNECTED_IMAGE_RATIO = '722:829';
+
+/**
+ * The bind-success reply: the avatar "connected" card when a public image URL is
+ * configured, otherwise plain text. altText mirrors the original plain message so
+ * notifications and non-Flex clients lose nothing.
+ */
+function connectedMessage(unit: string, tenantName: string): messagingApi.Message {
+  const alt =
+    `✓ เชื่อมสำเร็จ — กลุ่มนี้คือ ${unit} (ผู้เช่า: ${tenantName}) แล้วครับ\n` +
+    'สลิปที่ส่งในกลุ่มนี้จะถูกจับคู่กับบิลของห้องนี้';
+  if (!config.PUBLIC_BASE_URL) return { type: 'text', text: alt };
+  return {
+    type: 'flex',
+    altText: alt,
+    contents: {
+      type: 'bubble',
+      hero: {
+        type: 'image',
+        url: `${config.PUBLIC_BASE_URL}/${CONNECTED_IMAGE_PATH}`,
+        size: 'full',
+        aspectRatio: CONNECTED_IMAGE_RATIO,
+        aspectMode: 'cover',
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: 'เชื่อมสำเร็จแล้ว', weight: 'bold', size: 'xl', color: '#2E7D32', wrap: true },
+          { type: 'text', text: `กลุ่มนี้คือ ${unit}`, size: 'md', color: '#333333', wrap: true },
+          { type: 'text', text: `ผู้เช่า: ${tenantName}`, size: 'sm', color: '#555555', wrap: true },
+          {
+            type: 'text',
+            text: 'สลิปที่ส่งในกลุ่มนี้จะถูกจับคู่กับบิลของห้องนี้',
+            size: 'sm',
+            color: '#8A8A8A',
+            wrap: true,
+            margin: 'md',
+          },
+        ],
+      },
+    },
+  };
+}
 
 function unitLabel(lease: Lease & { property: Property }): string {
   const base = propertyLabel(lease.property) || lease.tenant_name;
@@ -188,10 +238,17 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
     const lease = await bindGroupToLease(leaseId, event.source.groupId, landlord.id);
     const p = lease.property;
     const unit = propertyLabel(p) || lease.tenant_name;
-    await replyText(
-      replyToken,
-      `✓ เชื่อมสำเร็จ — กลุ่มนี้คือ ${unit} (ผู้เช่า: ${lease.tenant_name}) แล้วครับ\nสลิปที่ส่งในกลุ่มนี้จะถูกจับคู่กับบิลของห้องนี้`,
-    );
+
+    const messages: messagingApi.Message[] = [connectedMessage(unit, lease.tenant_name)];
+
+    // Welcome the freshly-bound group with the outstanding balance, if any invoice
+    // is already due/overdue for this lease (mirrors the /remind card).
+    const target = (
+      await findReminderTargets(bangkokToday(), { cadenceOnly: false, landlordId: landlord.id })
+    ).find((t) => t.lease.id === lease.id);
+    if (target) messages.push(reminderMessage(target));
+
+    await replyMessages(replyToken, messages);
   } catch (err) {
     if (err instanceof GroupAlreadyBoundError) {
       return replyText(replyToken, 'กลุ่มนี้เชื่อมกับห้องอื่นอยู่แล้วครับ');

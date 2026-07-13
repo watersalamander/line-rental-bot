@@ -1,9 +1,16 @@
+import type { messagingApi } from '@line/bot-sdk';
 import { db } from '../db/client';
-import { pushText } from '../line/client';
+import { pushMessage, pushText } from '../line/client';
+import { config } from '../config';
 import { claimJobKey } from './jobs';
 import { propertyLabel } from './labels';
 import { bangkokToday } from './views';
 import type { Invoice, Landlord, Lease, Property } from '../db/types';
+
+// Avatar reminder card served from public/ (see @fastify/static). The ratio must
+// match the cropped image so the hero isn't distorted (see scripts/setup-cards.ts).
+const REMINDER_IMAGE_PATH = 'stickers/rent-reminder.png';
+const REMINDER_IMAGE_RATIO = '722:829';
 
 // ─────────────────────────────────────────────────────────────
 // Phase 5 — rent reminders, landlord-in-the-loop (spec §10 choice):
@@ -84,6 +91,58 @@ export function reminderText(t: ReminderTarget): string {
   return `${head}\nยอดค้าง ${baht(t.remaining)}\nโอนแล้วส่งสลิปในกลุ่มนี้ได้เลยครับ 🙏`;
 }
 
+/**
+ * The polished group reminder: the avatar as a Flex hero plus the concrete
+ * figures below. altText carries reminderText() so notifications and clients
+ * that can't render Flex lose nothing.
+ */
+export function reminderFlex(t: ReminderTarget, imageUrl: string): messagingApi.FlexMessage {
+  const dueToday = t.daysLate === 0;
+  const timing = dueToday ? 'ครบกำหนดวันนี้' : `เลยกำหนดมา ${t.daysLate} วัน`;
+  return {
+    type: 'flex',
+    altText: reminderText(t),
+    contents: {
+      type: 'bubble',
+      hero: {
+        type: 'image',
+        url: imageUrl,
+        size: 'full',
+        aspectRatio: REMINDER_IMAGE_RATIO,
+        aspectMode: 'cover',
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'text',
+            text: `🔔 ค่าเช่างวด ${t.invoice.period_month}`,
+            weight: 'bold',
+            size: 'xl',
+            color: dueToday ? '#2E7D32' : '#C62828',
+            wrap: true,
+          },
+          { type: 'text', text: timing, size: 'sm', color: '#555555', wrap: true },
+          { type: 'text', text: `ยอดค้าง ${baht(t.remaining)}`, weight: 'bold', size: 'lg', color: '#333333', wrap: true, margin: 'sm' },
+          { type: 'text', text: 'โอนแล้วส่งสลิปในกลุ่มนี้ได้เลยครับ 🙏', size: 'sm', color: '#8A8A8A', wrap: true, margin: 'md' },
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * Group-reminder message: the Flex card when a public image URL is configured,
+ * otherwise plain text (Flex heroes need a public HTTPS image URL).
+ */
+export function reminderMessage(t: ReminderTarget): messagingApi.Message {
+  return config.PUBLIC_BASE_URL
+    ? reminderFlex(t, `${config.PUBLIC_BASE_URL}/${REMINDER_IMAGE_PATH}`)
+    : { type: 'text', text: reminderText(t) };
+}
+
 /** Daily DM to the owner listing units on cadence, with the /remind call-to-action. */
 export function digestText(targets: ReminderTarget[], today: string): string {
   const lines = [`🔔 รายการค้างชำระ (${today})`, ''];
@@ -107,7 +166,7 @@ export async function sendGroupReminders(
   let sent = 0;
   for (const t of targets) {
     if (!(await claimJobKey(`remind:${t.invoice.id}:${today}`))) continue;
-    await pushText(t.lease.line_group_id as string, reminderText(t));
+    await pushMessage(t.lease.line_group_id as string, reminderMessage(t));
     console.log(`[remind] sent → ${t.unit} (${t.invoice.period_month}, ${t.daysLate}d late)`);
     sent++;
   }
@@ -131,7 +190,7 @@ export async function sendGroupRemindersForLease(
   let sent = 0;
   for (const t of targets) {
     if (!(await claimJobKey(`remind:${t.invoice.id}:${today}`))) continue;
-    await pushText(t.lease.line_group_id as string, reminderText(t));
+    await pushMessage(t.lease.line_group_id as string, reminderMessage(t));
     console.log(`[remind] menu sent → ${t.unit} (${t.invoice.period_month}, ${t.daysLate}d late)`);
     sent++;
   }

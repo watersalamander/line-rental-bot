@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:push": "supabase db push",
     "richmenu:image": "tsx scripts/richmenu-image.ts",
-    "richmenu:setup": "tsx scripts/setup-richmenu.ts"
+    "richmenu:setup": "tsx scripts/setup-richmenu.ts",
+    "cards:image": "tsx scripts/setup-cards.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

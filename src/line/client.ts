@@ -34,6 +34,11 @@ export async function pushText(userId: string, text: string): Promise<void> {
   await lineClient.pushMessage({ to: userId, messages: [{ type: 'text', text }] });
 }
 
+/** Push an arbitrary message object (e.g. a Flex card) to a user or group. */
+export async function pushMessage(to: string, message: messagingApi.Message): Promise<void> {
+  await lineClient.pushMessage({ to, messages: [message] });
+}
+
 /** Resolve a 1:1 user's LINE display name (requires the user to have added the bot). */
 export async function getUserName(userId: string): Promise<string | null> {
   try {

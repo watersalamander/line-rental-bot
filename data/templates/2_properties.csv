@@ -1,6 +1,10 @@
-﻿owner_name,property_name,building,unit_no,purchase_price
-แพรว,เกษมสันต์ 1,,24/67,4500000
-แพรว,The Address Patumwan,,458/65,6450000
-แพรว,The Esse Asoke,,333/23,7378000
-แพรว,The Esse Sukhumvit 36,,992/211,12600000
-พลอย,Anil Sathorn 12,,122/172,9845000
+﻿owner_name,property_name,floor_level,unit_no,size (square meter),purchase_price,rental aim
+อาโนว์,เกษมสันต์ 1,11,24/67,46.35,4500000,25000
+พลอย,The Address Patumwan,7,458/65,46.75,6450000,25000
+แพรว,The Esse Asoke,11,333/23,36.89,7378000,27000
+แพรว,The Esse Sukhumvit 36,27,992/211,38.14,12600000,40000
+พลอย,Anil Sathorn 12,32,122/172,45.64,9845000,39000
+พิม,Ashton Chula-Silom,23,800/429,33.92,7190342,27000
+พิม,The Crest Ladprao,32,1198/368,41.77,8400000,40000
+อาโนว์,The Esse Complex,12,1788/57,35.42,9117052,27000
+อาโนว์,333 Riverside,16,333/144,94.06,16100000,

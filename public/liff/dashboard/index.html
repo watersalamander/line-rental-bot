@@ -59,6 +59,10 @@
     .tile .v { font-size:18px; font-weight:800; margin-top:4px; line-height:1.25; }
     .tile .s { font-size:11px; color:var(--muted); margin-top:4px; }
 
+    .info-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px 8px; }
+    .info-grid .k { font-size:11px; color:var(--muted); font-weight:600; }
+    .info-grid .v { font-size:14px; font-weight:700; margin-top:2px; line-height:1.3; }
+
     .chart-caption { font-size:12px; color:var(--muted); margin-top:8px; text-align:center; }
     .chart-caption b { color:var(--ink); }
     svg .hit { cursor:pointer; }
@@ -115,6 +119,11 @@
               <div class="v" id="rentState">—</div>
               <div class="s" id="rentSub"></div>
             </div>
+          </div>
+
+          <div class="card hidden" id="infoCard">
+            <h2>ข้อมูลห้อง</h2>
+            <div class="info-grid" id="infoGrid"></div>
           </div>
 
           <div class="card">
@@ -222,6 +231,8 @@
       $('propName').textContent = d.name;
       $('propOwner').textContent = 'เจ้าของ: ' + d.owner;
 
+      renderInfo(d.info || {});
+
       const netCls = d.allTime.net > 0 ? 'pos' : d.allTime.net < 0 ? 'neg' : '';
       $('allTimeNet').textContent = bahtSigned(d.allTime.net);
       $('allTimeNet').className = 'v ' + netCls;
@@ -244,6 +255,22 @@
       renderChart();
       renderMonthOptions(d);
       renderTxnList(d, $('monthSel').value);
+    }
+
+    // ── unit metadata card (from 2_properties.csv fields) ─────
+    function renderInfo(info) {
+      const items = [];
+      if (info.floor) items.push(['ชั้น', esc(info.floor)]);
+      if (info.unitNo) items.push(['เลขห้อง', esc(info.unitNo)]);
+      if (info.sizeSqm != null) items.push(['ขนาด', Number(info.sizeSqm).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' ตร.ม.']);
+      if (info.purchasePrice != null) items.push(['ราคาซื้อ', baht(info.purchasePrice)]);
+      if (info.rentalAim != null) items.push(['ค่าเช่าเป้าหมาย', baht(info.rentalAim) + '<span class="muted" style="font-weight:400">/เดือน</span>']);
+      if (info.rentalAim != null && info.purchasePrice > 0) {
+        items.push(['Yield เป้าหมาย', (info.rentalAim * 12 / info.purchasePrice * 100).toFixed(2) + '%<span class="muted" style="font-weight:400">/ปี</span>']);
+      }
+      $('infoCard').classList.toggle('hidden', items.length === 0);
+      $('infoGrid').innerHTML = items.map(([k, v]) =>
+        '<div><div class="k">' + k + '</div><div class="v">' + v + '</div></div>').join('');
     }
 
     async function showProp(id) {

@@ -1,7 +1,8 @@
 // One-off import: loads data/templates/{1_landlords,2_properties,3_leases,4_transactions}.csv
 // into Supabase in dependency order. Safe to re-run: rows that already exist
-// (matched by natural key) are skipped, and all references are resolved and
-// validated before anything is written.
+// (matched by natural key) are skipped — except properties, whose per-condo
+// fields (owner, floor, size, prices) are synced from the CSV, the source of
+// truth. All references are resolved and validated before anything is written.
 //
 //   npx tsx scripts/import-family-data.ts [--dry-run]
 
@@ -72,6 +73,11 @@ async function main() {
 
   for (const [i, p] of propertiesCsv.entries()) {
     if (!ownerNames.has(p.owner_name)) errors.push(`2_properties row ${i + 2}: unknown owner "${p.owner_name}"`);
+    for (const col of ['size (square meter)', 'purchase_price', 'rental aim'] as const) {
+      if (p[col]) {
+        try { parseAmount(p[col]); } catch (e) { errors.push(`2_properties row ${i + 2}: ${col}: ${(e as Error).message}`); }
+      }
+    }
   }
   for (const [i, l] of leasesCsv.entries()) {
     if (!propNames.has(l.property_name)) errors.push(`3_leases row ${i + 2}: unknown property "${l.property_name}"`);
@@ -111,25 +117,56 @@ async function main() {
   }
   console.log(`landlords: +${newLandlords.length} inserted, ${landlordsCsv.length - newLandlords.length} already present`);
 
-  // ── 2. Properties (skip existing by name) ───────────────────
-  const { data: exP, error: e2 } = await db.from('properties').select('id, name');
+  // ── 2. Properties (insert new by name, sync fields on existing) ──
+  type PropRow = {
+    id: string; name: string; landlord_id: string; unit_no: string | null;
+    floor_level: string | null; size_sqm: number | null;
+    purchase_price: number | null; rental_aim: number | null;
+  };
+  const { data: exP, error: e2 } = await db.from('properties')
+    .select('id, name, landlord_id, unit_no, floor_level, size_sqm, purchase_price, rental_aim');
   if (e2) throw e2;
-  const propertyId = new Map<string, string>((exP ?? []).map((p) => [p.name as string, p.id as string]));
+  const existingProp = new Map<string, PropRow>(((exP ?? []) as PropRow[]).map((p) => [p.name, p]));
+  const propertyId = new Map<string, string>([...existingProp].map(([name, p]) => [name, p.id]));
+
+  // The CSV is the source of truth for these per-condo fields.
+  const desiredFields = (r: Record<string, string>) => ({
+    landlord_id: landlordId.get(r.owner_name)!,
+    unit_no: r.unit_no || null,
+    floor_level: r.floor_level || null,
+    size_sqm: r['size (square meter)'] ? parseAmount(r['size (square meter)']) : null,
+    purchase_price: r.purchase_price ? parseAmount(r.purchase_price) : null,
+    rental_aim: r['rental aim'] ? parseAmount(r['rental aim']) : null,
+  });
+
   const newProps = propertiesCsv.filter((r) => !propertyId.has(r.property_name));
   if (newProps.length) {
     const { data, error } = await db.from('properties')
-      .insert(newProps.map((r) => ({
-        landlord_id: landlordId.get(r.owner_name)!,
-        name: r.property_name,
-        building: r.building || null,
-        unit_no: r.unit_no || null,
-        purchase_price: r.purchase_price ? parseAmount(r.purchase_price) : null,
-      })))
+      .insert(newProps.map((r) => ({ name: r.property_name, ...desiredFields(r) })))
       .select('id, name');
     if (error) throw error;
     for (const p of data!) propertyId.set(p.name, p.id);
   }
-  console.log(`properties: +${newProps.length} inserted, ${propertiesCsv.length - newProps.length} already present`);
+
+  let syncedProps = 0;
+  for (const r of propertiesCsv) {
+    const ex = existingProp.get(r.property_name);
+    if (!ex) continue;
+    const want = desiredFields(r);
+    const numEq = (a: number | null, b: number | null) =>
+      (a === null && b === null) || (a !== null && b !== null && Number(a) === Number(b));
+    const changed = (Object.keys(want) as Array<keyof typeof want>).filter((k) =>
+      k === 'landlord_id' || k === 'unit_no' || k === 'floor_level'
+        ? (ex[k] ?? null) !== want[k]
+        : !numEq(ex[k] as number | null, want[k] as number | null),
+    );
+    if (changed.length === 0) continue;
+    const { error } = await db.from('properties').update(want).eq('id', ex.id);
+    if (error) throw error;
+    syncedProps++;
+    console.log(`  synced "${r.property_name}": ${changed.join(', ')}`);
+  }
+  console.log(`properties: +${newProps.length} inserted, ${syncedProps} updated, ${propertiesCsv.length - newProps.length - syncedProps} unchanged`);
 
   // ── 3. Leases (skip existing by property + tenant + start) ──
   const { data: exLs, error: e3 } = await db.from('leases').select('property_id, tenant_name, start_date');

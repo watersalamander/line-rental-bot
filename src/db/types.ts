@@ -17,7 +17,10 @@ export interface Property {
   name: string | null;
   building: string | null;
   unit_no: string | null;
+  floor_level: string | null; // 0005
+  size_sqm: number | null; // 0005
   purchase_price: number | null;
+  rental_aim: number | null; // 0005 — target rent per month
   created_at: string;
 }
 

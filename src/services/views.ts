@@ -301,10 +301,19 @@ export interface PropertyMonthNet {
 
 export type RentState = 'vacant' | 'paid' | 'partial' | 'unpaid';
 
+export interface PropertyInfo {
+  floor: string | null;
+  unitNo: string | null;
+  sizeSqm: number | null;
+  purchasePrice: number | null;
+  rentalAim: number | null; // target rent per month
+}
+
 export interface PropertyDetail {
   propertyId: string;
   name: string;
   owner: string;
+  info: PropertyInfo;
   allTime: { income: number; expense: number; net: number };
   rent: { state: RentState; tenant: string | null; due: number; paid: number; dueDate: string | null };
   monthly: PropertyMonthNet[]; // last 12 Bangkok months, oldest first
@@ -317,7 +326,7 @@ export async function getPropertyDetail(propertyId: string): Promise<PropertyDet
 
   const propRes = await db
     .from('properties')
-    .select('id, name, building, unit_no, landlord_id')
+    .select('id, name, building, unit_no, landlord_id, floor_level, size_sqm, purchase_price, rental_aim')
     .eq('id', propertyId)
     .maybeSingle();
   if (propRes.error) throw new Error(`propertyDetail/property: ${propRes.error.message}`);
@@ -327,6 +336,10 @@ export async function getPropertyDetail(propertyId: string): Promise<PropertyDet
     building: string | null;
     unit_no: string | null;
     landlord_id: string;
+    floor_level: string | null;
+    size_sqm: number | null;
+    purchase_price: number | null;
+    rental_aim: number | null;
   } | null;
   if (!prop) return null;
 
@@ -415,6 +428,13 @@ export async function getPropertyDetail(propertyId: string): Promise<PropertyDet
     propertyId: prop.id,
     name: propertyLabel(prop) || '(ไม่มีชื่อ)',
     owner: (ownerRes.data?.display_name as string | null) ?? '(ไม่มีชื่อ)',
+    info: {
+      floor: prop.floor_level,
+      unitNo: prop.unit_no,
+      sizeSqm: prop.size_sqm !== null ? Number(prop.size_sqm) : null,
+      purchasePrice: prop.purchase_price !== null ? Number(prop.purchase_price) : null,
+      rentalAim: prop.rental_aim !== null ? Number(prop.rental_aim) : null,
+    },
     allTime,
     rent,
     monthly: [...byMonth.values()],

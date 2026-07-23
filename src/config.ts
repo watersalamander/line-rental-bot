@@ -33,8 +33,10 @@ const schema = z.object({
     .transform((u) => u.replace(/\/+$/, ''))
     .optional(),
 
-  // Ops alerting: LINE userId that receives error alerts (the operator's own
-  // id). Unset → errors are only logged, never pushed.
+  // The single admin account (LINE userId). Gates /setup (group registration),
+  // /invite (invite codes), and the stay-or-leave decision when the bot joins a
+  // group; also receives ops error alerts. Unset → admin actions fail closed
+  // (nobody can register groups or invite members) and errors are only logged.
   ADMIN_LINE_USER_ID: z.string().optional(),
 
   // Phase 2 (slip reading). 'claude' = Claude Vision (default, pay-per-use, no

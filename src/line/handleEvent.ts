@@ -4,6 +4,9 @@ import { handleSlipImage } from './slipHandler';
 import { handleExpenseImage, handleExpensePostback, handleExpenseText, isExpensePostback } from './expenseHandler';
 import { handleLinkPostback, interceptUnknownUser, isLinkPostback } from './linkHandler';
 import { handleMenuPostback, isMenuPostback } from './menuHandler';
+import { handleJoin } from './groupGate';
+import { isAdminUser } from './admin';
+import { findActiveLeaseByGroup } from '../services/leases';
 
 /**
  * Top-level event dispatch.
@@ -20,6 +23,9 @@ export async function handleEvent(event: WebhookEvent): Promise<void> {
     : 'unknown';
   console.log(`[event] ${event.type} from ${scope}`);
 
+  // Layer 1: vet every group/room the bot gets invited into.
+  if (event.type === 'join') return handleJoin(event);
+
   if (event.type === 'postback') {
     if (isLinkPostback(event.postback.data)) await handleLinkPostback(event);
     else if (isExpensePostback(event.postback.data)) await handleExpensePostback(event);
@@ -30,10 +36,28 @@ export async function handleEvent(event: WebhookEvent): Promise<void> {
 
   if (event.type !== 'message' || event.replyToken === undefined) return;
 
-  // 1:1 message from a LINE account with no landlord row → identity picker
-  // ("คุณคือใคร?") before any command/expense handling, so an unlinked family
-  // member never gets a duplicate profile. Groups are tenant territory and
-  // never see the picker.
+  // Layer 1, message side: rooms are never serviced, and an unbound group gets
+  // nothing except the admin's /setup — the one message that can register it.
+  // (Backstop for groups joined while the server was down, where the join-event
+  // gate never ran.)
+  if (source.type === 'room') return;
+  if (source.type === 'group') {
+    const bound = await findActiveLeaseByGroup(source.groupId);
+    if (!bound) {
+      const text = event.message.type === 'text' ? event.message.text.trim() : '';
+      if (/^\/setup\b/i.test(text) && isAdminUser(source.userId)) {
+        return handleCommand(event, text);
+      }
+      console.log(`[gate] ignored ${event.message.type} in unbound ${scope}`);
+      return;
+    }
+  }
+
+  // 1:1 message from a LINE account with no landlord row → Layer-3 invite gate
+  // (uninvited accounts must type a valid /invite code), then the identity
+  // picker ("คุณคือใคร?") before any command/expense handling, so an unlinked
+  // family member never gets a duplicate profile. Groups are tenant territory
+  // and never see the picker.
   if (source.type === 'user' && (event.message.type === 'text' || event.message.type === 'image')) {
     if (await interceptUnknownUser(event)) return;
   }

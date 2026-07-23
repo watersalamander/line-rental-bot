@@ -59,6 +59,26 @@ export async function getGroupMemberName(groupId: string, userId: string): Promi
   }
 }
 
+/** True when the user is currently a member of the group (any member — no friendship needed). */
+export async function isGroupMember(groupId: string, userId: string): Promise<boolean> {
+  try {
+    await lineClient.getGroupMemberProfile(groupId, userId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Leave a group (Layer-1 gate: the bot exits unregistered groups). */
+export async function leaveGroup(groupId: string): Promise<void> {
+  await lineClient.leaveGroup(groupId);
+}
+
+/** Leave a multi-person room — the bot never operates in rooms, only groups and 1:1. */
+export async function leaveRoom(roomId: string): Promise<void> {
+  await lineClient.leaveRoom(roomId);
+}
+
 /** Fetch the raw bytes of an image/file message for the slip-verification pipeline (Phase 2). */
 export async function getMessageContent(messageId: string): Promise<Buffer> {
   const stream = await lineBlobClient.getMessageContent(messageId);

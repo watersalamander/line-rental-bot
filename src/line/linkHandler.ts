@@ -6,12 +6,19 @@ import {
   listUnlinkedLandlords,
   upsertLandlord,
 } from '../services/landlords';
+import { hasRedeemedInvite, INVITE_CODE_RE, redeemInviteCode } from '../services/invites';
+import { isAdminUser } from './admin';
 
 // ─────────────────────────────────────────────────────────────
 // Identity linking: family members were imported with
 // line_user_id = null, so the first time each of them talks to
 // the bot we ask "who are you?" and bind their LINE account to
 // the right landlord row — instead of minting a duplicate.
+//
+// Layer-3 gate (in front of all of it): an unknown LINE account
+// gets nothing until it types a valid invite code from /invite.
+// The admin account bypasses the gate; everyone else must have a
+// redeemed code on record before the picker ever appears.
 //
 // Postback data formats:
 //   lnkp:<landlordId>   name picked → ask for confirmation
@@ -38,10 +45,10 @@ const quickLabel = (s: string) => (s.length > 20 ? `${s.slice(0, 19)}…` : s); 
 
 /**
  * Show the "คุณคือใคร?" picker if any unlinked family rows exist.
- * Returns false when there is nothing to offer (caller keeps its old
- * behavior, e.g. creating a fresh profile for a genuinely new user).
+ * Returns false when there is nothing to offer. An optional preamble
+ * (e.g. "รหัสถูกต้อง") is sent as a separate line above the picker.
  */
-export async function offerLinkPicker(replyToken: string): Promise<boolean> {
+export async function offerLinkPicker(replyToken: string, preamble?: string): Promise<boolean> {
   const unlinked = await listUnlinkedLandlords();
   if (unlinked.length === 0) return false;
   console.log(`[link] offering identity picker (${unlinked.length} unlinked)`);
@@ -65,26 +72,71 @@ export async function offerLinkPicker(replyToken: string): Promise<boolean> {
     },
   ];
 
-  await replyMessages(replyToken, [
-    {
-      type: 'text',
-      text: 'สวัสดีครับ 🙏 ยังไม่รู้จักบัญชี LINE นี้\nคุณคือใครครับ? แตะเลือกชื่อของคุณ:',
-      quickReply: { items },
-    },
-  ]);
+  const picker: messagingApi.Message = {
+    type: 'text',
+    text: 'สวัสดีครับ 🙏 ยังไม่รู้จักบัญชี LINE นี้\nคุณคือใครครับ? แตะเลือกชื่อของคุณ:',
+    quickReply: { items },
+  };
+  await replyMessages(
+    replyToken,
+    preamble ? [{ type: 'text', text: preamble }, picker] : [picker],
+  );
+  return true;
+}
+
+const UNINVITED_REPLY =
+  'สวัสดีครับ 🙏 บอทนี้ใช้งานภายในครอบครัวเท่านั้น\n' +
+  'หากคุณเป็นสมาชิก กรุณาขอ "รหัสเชิญ" จากแอดมิน แล้วพิมพ์รหัสที่ได้รับที่นี่ครับ';
+
+/**
+ * Invited-but-unlinked account: offer the identity picker, or — when no
+ * unlinked family rows remain — create a fresh profile on the spot.
+ * Always consumes the event.
+ */
+async function linkOrCreateProfile(
+  replyToken: string,
+  userId: string,
+  preamble?: string,
+): Promise<true> {
+  if (await offerLinkPicker(replyToken, preamble)) return true;
+
+  const name = await getUserName(userId);
+  const landlord = await upsertLandlord(userId, name);
+  console.log(`[link] new profile ${userId} → landlord ${landlord.id} (${landlord.display_name})`);
+  await replyText(
+    replyToken,
+    `${preamble ? `${preamble}\n` : ''}✓ สร้างโปรไฟล์ใหม่ให้แล้วครับ (${landlord.display_name ?? 'ไม่มีชื่อ'})\n` +
+      'พิมพ์ /help เพื่อดูคำสั่งทั้งหมดครับ',
+  );
   return true;
 }
 
 /**
- * Gate for 1:1 events: when the sender has no landlord row yet, show the
- * picker (or fall through when no unlinked rows remain) and report whether
- * the event was consumed. Linked users pass straight through.
+ * Gate for 1:1 events from accounts with no landlord row yet. Layer 3:
+ * unless the sender is the admin or already redeemed an invite code, the
+ * only accepted message is a valid code — everything else gets a polite
+ * "internal use only" reply. Linked users pass straight through.
  */
 export async function interceptUnknownUser(event: MessageEvent): Promise<boolean> {
   if (event.source.type !== 'user' || event.replyToken === undefined) return false;
-  const landlord = await getLandlordByLineUserId(event.source.userId);
+  const userId = event.source.userId;
+  const landlord = await getLandlordByLineUserId(userId);
   if (landlord) return false;
-  return offerLinkPicker(event.replyToken);
+
+  if (!isAdminUser(userId) && !(await hasRedeemedInvite(userId))) {
+    if (event.message.type === 'text') {
+      const attempt = event.message.text.trim().toUpperCase();
+      if (INVITE_CODE_RE.test(attempt) && (await redeemInviteCode(attempt, userId))) {
+        console.log(`[link] ${userId} redeemed invite code ${attempt}`);
+        return linkOrCreateProfile(event.replyToken, userId, '✓ รหัสเชิญถูกต้องครับ');
+      }
+    }
+    console.log(`[link] uninvited account ${userId} — rejected`);
+    await replyText(event.replyToken, UNINVITED_REPLY);
+    return true;
+  }
+
+  return linkOrCreateProfile(event.replyToken, userId);
 }
 
 export async function handleLinkPostback(event: PostbackEvent): Promise<void> {
@@ -98,6 +150,13 @@ export async function handleLinkPostback(event: PostbackEvent): Promise<void> {
   const existing = await getLandlordByLineUserId(userId);
   if (existing) {
     return replyText(replyToken, `บัญชี LINE ของคุณผูกกับ «${existing.display_name ?? '?'}» อยู่แล้วครับ`);
+  }
+
+  // Layer-3 backstop: the picker is only ever sent to invited accounts, but a
+  // postback is cheap to forge — re-check the invite before honoring any tap.
+  if (!isAdminUser(userId) && !(await hasRedeemedInvite(userId))) {
+    console.log(`[link] uninvited account ${userId} sent link postback — rejected`);
+    return replyText(replyToken, UNINVITED_REPLY);
   }
 
   if (data.startsWith(LINK_PICK_PREFIX)) {

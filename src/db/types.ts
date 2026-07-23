@@ -41,6 +41,15 @@ export interface Lease {
   created_at: string;
 }
 
+export interface InviteCode {
+  code: string;
+  created_by: string; // admin LINE userId (0006)
+  created_at: string;
+  expires_at: string;
+  used_by: string | null; // LINE userId that redeemed it — permanent "was invited" record
+  used_at: string | null;
+}
+
 export interface Invoice {
   id: string;
   lease_id: string;

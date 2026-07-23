@@ -19,6 +19,8 @@ import {
   type ReminderTarget,
 } from '../services/reminders';
 import { config } from '../config';
+import { isAdminUser } from './admin';
+import { createInviteCode, INVITE_EXPIRY_HOURS } from '../services/invites';
 import type { Lease, Property } from '../db/types';
 
 const BIND_PREFIX = 'bind:';
@@ -102,19 +104,26 @@ export async function handleCommand(event: MessageEvent, text: string): Promise<
       return handleRemind(event);
     case 'dashboard':
       return handleDashboard(event);
-    case 'help':
+    case 'invite':
+      return handleInvite(event);
+    case 'help': {
+      const adminHelp = isAdminUser(event.source.type === 'user' ? event.source.userId : undefined)
+        ? '\n\nคำสั่งแอดมิน:\n/invite — สร้างรหัสเชิญสำหรับสมาชิกใหม่ (แชทส่วนตัวเท่านั้น)'
+        : '';
       return replyText(
         event.replyToken,
         'คำสั่งที่ใช้ได้:\n' +
-          '/setup — เชื่อมกลุ่มนี้กับห้องของคุณ\n' +
+          '/setup — เชื่อมกลุ่มนี้กับห้องของคุณ (เฉพาะแอดมิน)\n' +
           '/status — สถานะงวดปัจจุบันของทุกห้อง (แชทส่วนตัวเท่านั้น)\n' +
           '/summary — สรุปยอดเดือนที่แล้ว (แชทส่วนตัวเท่านั้น)\n' +
           '/remind — ส่งแจ้งเตือนค่าเช่าไปยังกลุ่มที่ค้างชำระและถึงกำหนด (แชทส่วนตัวเท่านั้น)\n' +
           '/dashboard — เปิดแดชบอร์ดบนเว็บ\n\n' +
           'บันทึกรายรับ/รายจ่าย (แชทส่วนตัวเท่านั้น): ส่งรูปสลิปการชำระเงิน ' +
           'หรือพิมพ์จำนวนเงิน เช่น "500 ค่าส่วนกลาง"\n\n' +
-          'หรือแตะเมนูด้านล่างเพื่อใช้งานทุกฟังก์ชันได้เลยครับ 👇',
+          'หรือแตะเมนูด้านล่างเพื่อใช้งานทุกฟังก์ชันได้เลยครับ 👇' +
+          adminHelp,
       );
+    }
     default:
       return replyText(event.replyToken, `ไม่รู้จักคำสั่ง: /${command}`);
   }
@@ -194,6 +203,32 @@ async function handleDashboard(event: MessageEvent): Promise<void> {
   return replyText(replyToken, `📈 แดชบอร์ด:\nhttps://liff.line.me/${config.LIFF_ID}/dashboard/`);
 }
 
+/** /invite — admin mints a single-use code that lets a new family member pass the 1:1 gate. */
+async function handleInvite(event: MessageEvent): Promise<void> {
+  const replyToken = event.replyToken;
+  if (replyToken === undefined) return;
+
+  if (event.source.type !== 'user') {
+    return replyText(replyToken, 'สร้างรหัสเชิญได้ในแชทส่วนตัวกับบอทเท่านั้นครับ');
+  }
+  if (!config.ADMIN_LINE_USER_ID) {
+    return replyText(replyToken, 'ยังไม่ได้ตั้งค่าแอดมิน (ADMIN_LINE_USER_ID) ในเซิร์ฟเวอร์ครับ');
+  }
+  if (!isAdminUser(event.source.userId)) {
+    return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่สร้างรหัสเชิญได้');
+  }
+
+  const invite = await createInviteCode(event.source.userId);
+  return replyText(
+    replyToken,
+    `🔑 รหัสเชิญ: ${invite.code}\n\n` +
+      'ส่งรหัสนี้ให้สมาชิกในครอบครัว แล้วให้:\n' +
+      '1. เพิ่มบอทเป็นเพื่อน\n' +
+      '2. พิมพ์รหัสนี้ในแชทส่วนตัวกับบอท\n\n' +
+      `(ใช้ได้ครั้งเดียว หมดอายุใน ${INVITE_EXPIRY_HOURS} ชั่วโมง)`,
+  );
+}
+
 async function handleSetup(event: MessageEvent): Promise<void> {
   const replyToken = event.replyToken;
   if (replyToken === undefined) return;
@@ -204,6 +239,12 @@ async function handleSetup(event: MessageEvent): Promise<void> {
   const userId = event.source.userId;
   if (!userId) {
     return replyText(replyToken, 'ไม่สามารถระบุตัวตนของคุณได้ กรุณาเพิ่มบอทเป็นเพื่อนก่อน แล้วพิมพ์ /setup อีกครั้งครับ');
+  }
+  if (!config.ADMIN_LINE_USER_ID) {
+    return replyText(replyToken, 'ยังไม่ได้ตั้งค่าแอดมิน (ADMIN_LINE_USER_ID) ในเซิร์ฟเวอร์ครับ');
+  }
+  if (!isAdminUser(userId)) {
+    return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่เชื่อมกลุ่มได้');
   }
 
   const landlord = await getLandlordByLineUserId(userId);
@@ -254,6 +295,12 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
   }
   const userId = event.source.userId;
   if (!userId) return replyText(replyToken, 'ไม่สามารถระบุตัวตนของคุณได้ครับ');
+
+  // Quick-reply buttons are visible to everyone in the group — re-check that
+  // the tap actually came from the admin, not a curious tenant.
+  if (!isAdminUser(userId)) {
+    return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่เชื่อมกลุ่มได้');
+  }
 
   const landlord = await getLandlordByLineUserId(userId);
   if (!landlord) return replyText(replyToken, 'เฉพาะเจ้าของห้องเท่านั้นที่เชื่อมกลุ่มนี้ได้ครับ');

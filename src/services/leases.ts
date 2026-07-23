@@ -78,7 +78,30 @@ export async function createLease(input: CreateLeaseInput): Promise<CreateLeaseR
     property = data as Property;
   }
 
-  // 2. Insert the lease.
+  // 2. One tenant at a time: reject if an active lease on this property overlaps
+  // the new contract's date range. (Ended leases never block; an active lease
+  // whose end_date is before the new start_date doesn't either, so a follow-up
+  // tenant can be added before the old contract is marked ended.) Select-then-
+  // insert is race-prone in theory, but fine at family scale.
+  const { data: overlapping, error: overlapErr } = await db
+    .from('leases')
+    .select('tenant_name, end_date')
+    .eq('property_id', property.id)
+    .eq('status', 'active')
+    .lte('start_date', input.endDate)
+    .gte('end_date', input.startDate)
+    .limit(1);
+  if (overlapErr) throw new Error(`createLease/overlap: ${overlapErr.message}`);
+  if (overlapping && overlapping.length > 0) {
+    const existing = overlapping[0] as { tenant_name: string; end_date: string };
+    throw new Error(
+      `ห้องนี้มีสัญญาเช่าที่ยังไม่สิ้นสุดในช่วงเวลาเดียวกันอยู่แล้ว ` +
+        `(ผู้เช่า: ${existing.tenant_name} ถึง ${existing.end_date}) — ` +
+        'สัญญาใหม่ต้องเริ่มหลังจากสัญญาเดิมสิ้นสุดครับ',
+    );
+  }
+
+  // 3. Insert the lease.
   const { data: leaseData, error: leaseErr } = await db
     .from('leases')
     .insert({
@@ -98,7 +121,7 @@ export async function createLease(input: CreateLeaseInput): Promise<CreateLeaseR
   if (leaseErr) throw new Error(`createLease/lease: ${leaseErr.message}`);
   const lease = leaseData as Lease;
 
-  // 3. Generate the first invoice: period = start month, due = that month's due_day.
+  // 4. Generate the first invoice: period = start month, due = that month's due_day.
   const periodMonth = input.startDate.slice(0, 7); // 'YYYY-MM'
   const dueDate = `${periodMonth}-${String(input.dueDay).padStart(2, '0')}`;
   const amountDue = input.firstInvoiceOverride ?? input.rentAmount;

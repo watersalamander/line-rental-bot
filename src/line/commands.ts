@@ -1,7 +1,13 @@
 import type { messagingApi, MessageEvent, PostbackEvent } from '@line/bot-sdk';
 import { pushMessage, replyMessages, replyText } from './client';
 import { getLandlordByLineUserId } from '../services/landlords';
-import { bindGroupToLease, GroupAlreadyBoundError, listUnboundActiveLeases } from '../services/leases';
+import {
+  bindGroupToLease,
+  findActiveLeaseByGroup,
+  GroupAlreadyBoundError,
+  listUnboundActiveLeases,
+  unbindLease,
+} from '../services/leases';
 import { propertyLabel } from '../services/labels';
 import {
   bangkokToday,
@@ -27,6 +33,10 @@ const BIND_PREFIX = 'bind:';
 // Owner's answer to the "send this reminder into the tenant group?" prompt.
 const REMIND_APPROVE_PREFIX = 'grem:'; // grem:<leaseId>
 const REMIND_DECLINE_PREFIX = 'grno:'; // grno:<leaseId>
+// /unbind confirmation. Exported: the kick alert (groupGate) reuses the same
+// postback so the admin can free a binding from their 1:1 chat.
+export const UNBIND_PREFIX = 'unb:'; // unb:<leaseId>
+const UNBIND_CANCEL = 'unbx';
 
 // Avatar "connected" card served from public/ (see @fastify/static). The ratio
 // must match the cropped image (see scripts/setup-cards.ts).
@@ -96,6 +106,8 @@ export async function handleCommand(event: MessageEvent, text: string): Promise<
   switch (command) {
     case 'setup':
       return handleSetup(event);
+    case 'unbind':
+      return handleUnbind(event);
     case 'status':
       return handleStatus(event);
     case 'summary':
@@ -108,7 +120,9 @@ export async function handleCommand(event: MessageEvent, text: string): Promise<
       return handleInvite(event);
     case 'help': {
       const adminHelp = isAdminUser(event.source.type === 'user' ? event.source.userId : undefined)
-        ? '\n\nคำสั่งแอดมิน:\n/invite — สร้างรหัสเชิญสำหรับสมาชิกใหม่ (แชทส่วนตัวเท่านั้น)'
+        ? '\n\nคำสั่งแอดมิน:\n' +
+          '/invite — สร้างรหัสเชิญสำหรับสมาชิกใหม่ (แชทส่วนตัวเท่านั้น)\n' +
+          '/unbind — ยกเลิกการเชื่อมกลุ่มกับห้อง (พิมพ์ในกลุ่มที่เชื่อมอยู่)'
         : '';
       return replyText(
         event.replyToken,
@@ -229,6 +243,80 @@ async function handleInvite(event: MessageEvent): Promise<void> {
   );
 }
 
+/**
+ * /unbind — typed in a bound group (unbound groups never reach here: the
+ * Layer-1 gate ignores them). Confirm-first so a stray message can't detach a
+ * tenant group. The bot stays in the group afterwards — the admin can /setup
+ * a different unit or remove the bot manually.
+ */
+async function handleUnbind(event: MessageEvent): Promise<void> {
+  const replyToken = event.replyToken;
+  if (replyToken === undefined) return;
+
+  if (event.source.type !== 'group') {
+    return replyText(replyToken, 'พิมพ์ /unbind ในกลุ่มที่ต้องการยกเลิกการเชื่อมครับ');
+  }
+  if (!isAdminUser(event.source.userId)) {
+    return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่ยกเลิกการเชื่อมได้');
+  }
+
+  const bound = await findActiveLeaseByGroup(event.source.groupId);
+  if (!bound) {
+    return replyText(replyToken, 'กลุ่มนี้ยังไม่ได้เชื่อมกับห้องครับ');
+  }
+  const unit = propertyLabel(bound.property) || bound.lease.tenant_name;
+
+  return replyMessages(replyToken, [
+    {
+      type: 'text',
+      text:
+        `ยืนยันยกเลิกการเชื่อมกลุ่มนี้กับ ${unit} (ผู้เช่า: ${bound.lease.tenant_name}) ใช่ไหมครับ?\n` +
+        'สลิปที่ส่งในกลุ่มนี้จะไม่ถูกจับคู่กับบิลอีก จนกว่าจะเชื่อมใหม่ด้วย /setup',
+      quickReply: {
+        items: [
+          {
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '✅ ใช่ ยกเลิกการเชื่อม',
+              data: `${UNBIND_PREFIX}${bound.lease.id}`,
+              displayText: 'ใช่ ยกเลิกการเชื่อม',
+            },
+          },
+          {
+            type: 'action',
+            action: { type: 'postback', label: '❌ ไม่ยกเลิก', data: UNBIND_CANCEL, displayText: 'ไม่ยกเลิก' },
+          },
+        ],
+      },
+    },
+  ]);
+}
+
+/** Admin confirmed /unbind (in the group) or tapped the kick-alert button (1:1). */
+async function handleUnbindConfirm(event: PostbackEvent, leaseId: string): Promise<void> {
+  const replyToken = event.replyToken;
+  if (replyToken === undefined) return;
+  if (!isAdminUser(event.source.userId)) {
+    return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่ยกเลิกการเชื่อมได้');
+  }
+
+  // In-group tap must match the group it was issued in (stale-button guard);
+  // a 1:1 tap (kick alert) unbinds wherever the lease is currently bound.
+  const requireGroupId = event.source.type === 'group' ? event.source.groupId : undefined;
+  const lease = await unbindLease(leaseId, requireGroupId);
+  if (!lease) {
+    return replyText(replyToken, 'ไม่พบการเชื่อมนี้แล้วครับ (อาจถูกยกเลิกไปก่อนหน้านี้)');
+  }
+  const unit = propertyLabel(lease.property) || lease.tenant_name;
+  console.log(`[unbind] lease ${lease.id} (${unit}) detached from its group`);
+  return replyText(
+    replyToken,
+    `✓ ยกเลิกการเชื่อมกับ ${unit} แล้วครับ\n` +
+      'ห้องนี้กลับไปอยู่ในรายการ /setup — เชื่อมกลุ่มใหม่ได้ทุกเมื่อครับ',
+  );
+}
+
 async function handleSetup(event: MessageEvent): Promise<void> {
   const replyToken = event.replyToken;
   if (replyToken === undefined) return;
@@ -247,14 +335,10 @@ async function handleSetup(event: MessageEvent): Promise<void> {
     return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่เชื่อมกลุ่มได้');
   }
 
-  const landlord = await getLandlordByLineUserId(userId);
-  if (!landlord) {
-    return replyText(replyToken, 'กรุณาเปิดแอปแล้วเพิ่มสัญญาเช่าก่อน จากนั้นพิมพ์ /setup เพื่อเชื่อมกลุ่มนี้ครับ');
-  }
-
-  const leases = await listUnboundActiveLeases(landlord.id);
+  // Family-wide list: the admin registers groups for every member's properties.
+  const leases = await listUnboundActiveLeases();
   if (leases.length === 0) {
-    return replyText(replyToken, 'ไม่พบห้องที่ยังไม่ได้เชื่อม กรุณาเพิ่มสัญญาเช่าในแอปก่อน (หรือทุกห้องของคุณเชื่อมครบแล้ว) ครับ');
+    return replyText(replyToken, 'ไม่พบห้องที่ยังไม่ได้เชื่อม กรุณาเพิ่มสัญญาเช่าในแอปก่อน (หรือทุกห้องเชื่อมครบแล้ว) ครับ');
   }
 
   const items: messagingApi.QuickReplyItem[] = leases.slice(0, 13).map((lease) => ({
@@ -278,6 +362,12 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
   if (replyToken === undefined) return;
   const data = event.postback.data;
 
+  if (data.startsWith(UNBIND_PREFIX)) {
+    return handleUnbindConfirm(event, data.slice(UNBIND_PREFIX.length));
+  }
+  if (data === UNBIND_CANCEL) {
+    return replyText(replyToken, 'รับทราบครับ กลุ่มนี้ยังเชื่อมกับห้องเดิมอยู่');
+  }
   if (data.startsWith(REMIND_APPROVE_PREFIX)) {
     return handleReminderApprove(event, data.slice(REMIND_APPROVE_PREFIX.length));
   }
@@ -302,24 +392,23 @@ export async function handlePostback(event: PostbackEvent): Promise<void> {
     return replyText(replyToken, 'ขออภัยครับ เฉพาะแอดมินเท่านั้นที่เชื่อมกลุ่มได้');
   }
 
-  const landlord = await getLandlordByLineUserId(userId);
-  if (!landlord) return replyText(replyToken, 'เฉพาะเจ้าของห้องเท่านั้นที่เชื่อมกลุ่มนี้ได้ครับ');
-
   try {
-    const lease = await bindGroupToLease(leaseId, event.source.groupId, landlord.id);
+    const lease = await bindGroupToLease(leaseId, event.source.groupId);
     const p = lease.property;
     const unit = propertyLabel(p) || lease.tenant_name;
 
     // Confirm the binding in the group — but never post an overdue notice there
-    // unprompted. If a bill is already due/overdue, ask the OWNER privately first
-    // (landlord-in-the-loop, spec §10); they choose whether to nudge the tenants.
+    // unprompted. If a bill is already due/overdue, ask the unit's OWNER privately
+    // first (landlord-in-the-loop, spec §10) — the owner, not the admin doing the
+    // binding, since /remind approval is scoped to the owner's own leases.
     await replyMessages(replyToken, [connectedMessage(unit, lease.tenant_name)]);
 
+    const owner = lease.property.landlord;
     const target = (
-      await findReminderTargets(bangkokToday(), { cadenceOnly: false, landlordId: landlord.id })
+      await findReminderTargets(bangkokToday(), { cadenceOnly: false, landlordId: owner.id })
     ).find((t) => t.lease.id === lease.id);
-    if (target && landlord.line_user_id) {
-      await pushMessage(landlord.line_user_id, reminderApprovalPrompt(target)).catch((e) =>
+    if (target && owner.line_user_id) {
+      await pushMessage(owner.line_user_id, reminderApprovalPrompt(target)).catch((e) =>
         console.error('[setup] owner reminder prompt failed', e),
       );
     }

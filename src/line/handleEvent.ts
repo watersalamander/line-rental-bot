@@ -4,7 +4,7 @@ import { handleSlipImage } from './slipHandler';
 import { handleExpenseImage, handleExpensePostback, handleExpenseText, isExpensePostback } from './expenseHandler';
 import { handleLinkPostback, interceptUnknownUser, isLinkPostback } from './linkHandler';
 import { handleMenuPostback, isMenuPostback } from './menuHandler';
-import { handleJoin } from './groupGate';
+import { handleJoin, handleLeave } from './groupGate';
 import { isAdminUser } from './admin';
 import { findActiveLeaseByGroup } from '../services/leases';
 
@@ -23,8 +23,10 @@ export async function handleEvent(event: WebhookEvent): Promise<void> {
     : 'unknown';
   console.log(`[event] ${event.type} from ${scope}`);
 
-  // Layer 1: vet every group/room the bot gets invited into.
+  // Layer 1: vet every group/room the bot gets invited into; alert the admin
+  // when the bot is kicked out of a bound tenant group.
   if (event.type === 'join') return handleJoin(event);
+  if (event.type === 'leave') return handleLeave(event);
 
   if (event.type === 'postback') {
     if (isLinkPostback(event.postback.data)) await handleLinkPostback(event);

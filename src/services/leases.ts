@@ -42,12 +42,6 @@ export async function listProperties(landlordId: string): Promise<Property[]> {
   return (data ?? []) as Property[];
 }
 
-async function propertyIdsForLandlord(landlordId: string): Promise<string[]> {
-  const { data, error } = await db.from('properties').select('id').eq('landlord_id', landlordId);
-  if (error) throw new Error(`propertyIdsForLandlord: ${error.message}`);
-  return (data ?? []).map((r) => (r as { id: string }).id);
-}
-
 /**
  * Create a lease end-to-end: resolve/insert the property, insert the lease, and
  * auto-generate the first invoice from the start month + due day (spec §4.1).
@@ -155,17 +149,16 @@ export async function findActiveLeaseByGroup(
   return { lease: row, property: property as Property, landlord };
 }
 
-/** Active leases owned by the landlord that aren't yet bound to a group (for /setup). */
-export async function listUnboundActiveLeases(
-  landlordId: string,
-): Promise<Array<Lease & { property: Property }>> {
-  const propIds = await propertyIdsForLandlord(landlordId);
-  if (propIds.length === 0) return [];
-
+/**
+ * Every active lease not yet bound to a group — across ALL landlords (for
+ * /setup). Family-wide on purpose: only the single admin can run /setup, and
+ * they register groups for everyone's properties, so per-owner scoping here
+ * would make other members' units unbindable.
+ */
+export async function listUnboundActiveLeases(): Promise<Array<Lease & { property: Property }>> {
   const { data, error } = await db
     .from('leases')
     .select('*, property:properties(*)')
-    .in('property_id', propIds)
     .eq('status', 'active')
     .is('line_group_id', null)
     .order('created_at', { ascending: true });
@@ -174,27 +167,48 @@ export async function listUnboundActiveLeases(
   return (data ?? []) as Array<Lease & { property: Property }>;
 }
 
-/** Bind a group to one of the landlord's active leases. */
+/**
+ * Bind a group to any family member's active lease (admin-gated at the call
+ * site). Returns the property's owner too, so the caller can route the
+ * post-bind reminder prompt to whoever actually owns the unit.
+ */
 export async function bindGroupToLease(
   leaseId: string,
   groupId: string,
-  landlordId: string,
-): Promise<Lease & { property: Property }> {
-  const propIds = await propertyIdsForLandlord(landlordId);
-
+): Promise<Lease & { property: Property & { landlord: Landlord } }> {
   const { data, error } = await db
     .from('leases')
     .update({ line_group_id: groupId })
     .eq('id', leaseId)
     .eq('status', 'active')
-    .in('property_id', propIds.length ? propIds : ['00000000-0000-0000-0000-000000000000'])
-    .select('*, property:properties(*)')
+    .select('*, property:properties(*, landlord:landlords(*))')
     .maybeSingle();
 
   if (error) {
     if (error.code === '23505') throw new GroupAlreadyBoundError();
     throw new Error(`bindGroupToLease: ${error.message}`);
   }
-  if (!data) throw new Error('ไม่พบห้องนี้ในสัญญาเช่าที่ใช้งานอยู่ของคุณครับ');
-  return data as Lease & { property: Property };
+  if (!data) throw new Error('ไม่พบสัญญาเช่าที่ใช้งานอยู่ของห้องนี้ครับ');
+  return data as Lease & { property: Property & { landlord: Landlord } };
+}
+
+/**
+ * Detach a lease from its group (admin-gated at the call site). The lease goes
+ * back into the /setup picker. `requireGroupId` guards the in-group /unbind
+ * flow against stale confirm buttons — the kick-alert flow (admin 1:1) omits it
+ * and only requires that the lease is currently bound to something.
+ * Returns null when nothing matched (already unbound, or bound elsewhere).
+ */
+export async function unbindLease(
+  leaseId: string,
+  requireGroupId?: string,
+): Promise<(Lease & { property: Property }) | null> {
+  const query = db.from('leases').update({ line_group_id: null }).eq('id', leaseId);
+  const scoped = requireGroupId
+    ? query.eq('line_group_id', requireGroupId)
+    : query.not('line_group_id', 'is', null);
+  const { data, error } = await scoped.select('*, property:properties(*)').maybeSingle();
+
+  if (error) throw new Error(`unbindLease: ${error.message}`);
+  return (data as (Lease & { property: Property }) | null) ?? null;
 }

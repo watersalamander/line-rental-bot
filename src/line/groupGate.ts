@@ -1,8 +1,9 @@
-import type { JoinEvent } from '@line/bot-sdk';
-import { isGroupMember, leaveGroup, leaveRoom, replyText } from './client';
+import type { JoinEvent, LeaveEvent } from '@line/bot-sdk';
+import { isGroupMember, leaveGroup, leaveRoom, pushMessage, replyText } from './client';
 import { findActiveLeaseByGroup } from '../services/leases';
 import { propertyLabel } from '../services/labels';
 import { config } from '../config';
+import { UNBIND_PREFIX } from './commands';
 
 // ─────────────────────────────────────────────────────────────
 // Layer-1 gate: the bot is family-internal, but anyone on LINE
@@ -51,4 +52,47 @@ export async function handleJoin(event: JoinEvent): Promise<void> {
     (e) => console.error('[gate] leave notice failed', e),
   );
   await leaveGroup(groupId);
+}
+
+/**
+ * Bot removed from a group (kick, or the group was deleted). The binding is
+ * deliberately KEPT — an accidental kick shouldn't silently disconnect a tenant
+ * group — but the admin gets an alert with a one-tap unbind button (the same
+ * unb:<leaseId> postback as the in-group /unbind confirm), since /unbind itself
+ * is no longer reachable once the bot is out.
+ */
+export async function handleLeave(event: LeaveEvent): Promise<void> {
+  if (event.source.type !== 'group') return;
+  const groupId = event.source.groupId;
+
+  const bound = await findActiveLeaseByGroup(groupId);
+  if (!bound) {
+    console.log(`[gate] left unbound group ${groupId}`);
+    return;
+  }
+  console.log(`[gate] removed from BOUND group ${groupId} (lease ${bound.lease.id}) — binding kept`);
+
+  const adminId = config.ADMIN_LINE_USER_ID;
+  if (!adminId) return;
+  const unit = propertyLabel(bound.property) || bound.lease.tenant_name;
+  await pushMessage(adminId, {
+    type: 'text',
+    text:
+      `⚠️ บอทถูกเอาออกจากกลุ่มของ ${unit} (ผู้เช่า: ${bound.lease.tenant_name})\n` +
+      'การเชื่อมกลุ่มยังคงอยู่ — ถ้าไม่ได้ตั้งใจ ให้เชิญบอทกลับเข้ากลุ่มเดิมได้เลย\n' +
+      'ถ้าตั้งใจย้าย/เลิกใช้กลุ่มนี้ แตะปุ่มด้านล่างเพื่อยกเลิกการเชื่อม แล้วห้องจะกลับไปเลือกได้ใน /setup ครับ',
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: 'ยกเลิกการเชื่อม',
+            data: `${UNBIND_PREFIX}${bound.lease.id}`,
+            displayText: `ยกเลิกการเชื่อม ${unit}`,
+          },
+        },
+      ],
+    },
+  }).catch((e) => console.error('[gate] kick alert failed', e));
 }

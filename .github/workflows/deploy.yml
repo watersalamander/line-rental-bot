@@ -1,0 +1,91 @@
+name: Deploy (AWS Lambda)
+
+# Builds the Lambda bundle and `sam deploy`s template.yaml on every push to
+# main. Dormant until the repo VARIABLE AWS_DEPLOY_ENABLED is set to "true",
+# so it is safe to merge before the AWS account is ready. Setup: DEPLOY.md.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.AWS_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Lambda bundle
+        run: npm run build:lambda
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+
+      - name: Deploy stack
+        env:
+          LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EASYSLIP_TOKEN: ${{ secrets.EASYSLIP_TOKEN }}
+          SLIP_VENDOR: ${{ vars.SLIP_VENDOR }}
+          LINE_LOGIN_CHANNEL_ID: ${{ vars.LINE_LOGIN_CHANNEL_ID }}
+          LIFF_ID: ${{ vars.LIFF_ID }}
+          ADMIN_LINE_USER_ID: ${{ vars.ADMIN_LINE_USER_ID }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+        run: |
+          # Only pass parameters that are actually set; the rest keep the
+          # template defaults (blank = feature off, see src/config.ts).
+          overrides=()
+          add() { if [ -n "$2" ]; then overrides+=("$1=$2"); fi; }
+          add LineChannelSecret      "$LINE_CHANNEL_SECRET"
+          add LineChannelAccessToken "$LINE_CHANNEL_ACCESS_TOKEN"
+          add SupabaseUrl            "$SUPABASE_URL"
+          add SupabaseServiceRoleKey "$SUPABASE_SERVICE_ROLE_KEY"
+          add AnthropicApiKey        "$ANTHROPIC_API_KEY"
+          add EasyslipToken          "$EASYSLIP_TOKEN"
+          add SlipVendor             "$SLIP_VENDOR"
+          add LineLoginChannelId     "$LINE_LOGIN_CHANNEL_ID"
+          add LiffId                 "$LIFF_ID"
+          add AdminLineUserId        "$ADMIN_LINE_USER_ID"
+          add PublicBaseUrl          "${PUBLIC_BASE_URL%/}"
+
+          sam deploy \
+            --template-file template.yaml \
+            --stack-name line-rental-bot \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides "${overrides[@]}"
+
+      - name: Show Function URL
+        run: |
+          url=$(aws cloudformation describe-stacks --stack-name line-rental-bot \
+            --query "Stacks[0].Outputs[?OutputKey=='FunctionUrl'].OutputValue" --output text)
+          echo "Function URL: $url"
+          echo "### Function URL: $url" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS "${url}health"

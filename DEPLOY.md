@@ -1,96 +1,114 @@
-# Deploying to Railway
+# Deploying to AWS Lambda
 
-The bot is a single Node process (plus the cloud Supabase DB). Railway keeps it
-running 24/7 with a **stable public URL**, which replaces the dev box + cloudflared
-tunnel. Once deployed you update the LINE webhook / LIFF endpoint **once** and never
-touch a tunnel URL again.
+The bot gets a handful of requests a month, so production runs on **AWS Lambda**
+(pay-per-request, scales to zero) instead of an always-on server. At this traffic
+everything sits inside AWS's always-free tier — expected cost **$0/month**.
 
-Build is defined by [`Dockerfile`](Dockerfile) (multi-stage: compile TS → ship
-`dist/` + `public/` + prod deps only). [`railway.json`](railway.json) pins a single
-replica, a `/health` healthcheck, and restart-on-failure.
+| Piece | What it does |
+| --- | --- |
+| Lambda `line-rental-bot` | The whole Fastify app ([`src/lambda.ts`](src/lambda.ts)), bundled to one file by `npm run build:lambda` |
+| Lambda **Function URL** | Stable public HTTPS endpoint: LINE webhook, LIFF pages, `/api`, Flex images |
+| 2 × EventBridge schedules | 00:15 and 09:10 Asia/Bangkok → run the due cron jobs ([`src/scheduler.ts`](src/scheduler.ts)) |
+| CloudWatch log group | `/aws/lambda/line-rental-bot`, 30-day retention |
+
+All of it is defined in [`template.yaml`](template.yaml) (AWS SAM) and deployed by
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) on every push to `main`.
+The database stays on Supabase — nothing changes there.
+
+Local development is unchanged: `npm run dev` still runs the long-lived Fastify
+server with the in-process scheduler.
 
 ---
 
 ## One-time setup
 
-### 1. Push this repo to GitHub
-A git repo with an initial commit already exists locally. Create an empty GitHub repo
-(no README), then:
+### 1. AWS account + deploy user
+1. Create an AWS account (or use an existing one). **Set a billing alarm / budget**
+   (Billing → Budgets → "Zero spend budget") so any surprise charge emails you.
+2. IAM → Users → **Create user** `github-deploy` (no console access) and attach these
+   managed policies: `AWSCloudFormationFullAccess`, `AWSLambda_FullAccess`,
+   `IAMFullAccess`, `AmazonS3FullAccess`, `AmazonEventBridgeSchedulerFullAccess`,
+   `CloudWatchLogsFullAccess`. (Simpler but broader: `AdministratorAccess`.)
+3. On that user: Security credentials → **Create access key** → "Third-party service".
+   Keep the key id + secret for the next step.
 
-```sh
-git remote add origin https://github.com/<you>/<repo>.git
-git branch -M main
-git push -u origin main
-```
+### 2. GitHub repo settings (Settings → Secrets and variables → Actions)
 
-### 2. Create the Railway service
-1. Railway → **New Project → Deploy from GitHub repo** → pick this repo.
-2. Railway auto-detects the `Dockerfile` and builds. The first deploy will **fail health
-   checks until the env vars below are set** — that's expected.
+**Secrets** (same values as the Railway variables / your prod `.env`):
 
-### 3. Set environment variables
-Railway → your service → **Variables**. Add every key from
-[`.env.example`](.env.example) **except** `PORT` (Railway injects its own). Use your
-**production** values:
+| Secret | Notes |
+| --- | --- |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | from step 1 |
+| `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN` | Messaging API channel |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | production project |
+| `ANTHROPIC_API_KEY` | Claude Vision slip reading |
+| `EASYSLIP_TOKEN` | only if `SLIP_VENDOR=easyslip` |
+
+**Variables** (not secret):
 
 | Variable | Notes |
 | --- | --- |
-| `NODE_ENV` | `production` |
-| `LINE_CHANNEL_SECRET` | Messaging API channel |
-| `LINE_CHANNEL_ACCESS_TOKEN` | Messaging API channel (long-lived token) |
-| `SUPABASE_URL` | see "Which Supabase project?" below |
-| `SUPABASE_SERVICE_ROLE_KEY` | server-side only; keep secret |
-| `LINE_LOGIN_CHANNEL_ID` | verifies LIFF id tokens |
-| `LIFF_ID` | initialises the LIFF web app |
-| `SLIP_VENDOR` | `claude` |
-| `ANTHROPIC_API_KEY` | for Claude Vision slip reading |
+| `LINE_LOGIN_CHANNEL_ID`, `LIFF_ID` | LIFF |
+| `ADMIN_LINE_USER_ID` | admin gate + error alerts |
+| `AWS_REGION` | optional, default `ap-southeast-1` (Singapore) |
+| `SLIP_VENDOR` | optional, default `claude` |
+| `PUBLIC_BASE_URL` | leave unset for now — see step 4 |
+| `AWS_DEPLOY_ENABLED` | set to `true` **last**; the workflow is dormant without it |
 
-Do **not** add `PORT`. Do not upload `.env` (it is gitignored and never shipped).
+### 3. First deploy
+Actions → **Deploy (AWS Lambda)** → *Run workflow* (or push to `main`). When it
+finishes, the run summary shows the **Function URL**, e.g.
+`https://abc123.lambda-url.ap-southeast-1.on.aws/`, and the final step curls
+`/health`. This URL is permanent for the stack.
 
-### 4. Generate a public domain
-Railway → service → **Settings → Networking → Generate Domain**. You get something like
-`https://<name>.up.railway.app`. This URL is **permanent** for the service.
+### 4. Set `PUBLIC_BASE_URL` and redeploy
+Flex cards (slip receipt, reminder, setup) need absolute image URLs, and the URL
+isn't known until the first deploy. Set the GitHub variable `PUBLIC_BASE_URL` to the
+Function URL **without the trailing slash**, then run the workflow again.
 
-### 5. Point LINE at the new URL (do this yourself in the LINE console)
-- **Messaging API channel → Webhook URL** → `https://<name>.up.railway.app/webhook`,
-  then **Verify** and ensure "Use webhook" is on.
-- **LINE Login channel → your LIFF app → Endpoint URL** →
-  `https://<name>.up.railway.app/liff/`.
+### 5. Cut over from Railway (do this yourself in the LINE console)
+1. **Messaging API channel → Webhook settings → make sure "Webhook redelivery" is
+   OFF.** On Lambda the bot processes an event *before* acknowledging it (the
+   container freezes once it responds), so a slip read can take several seconds;
+   with redelivery on, LINE would re-send those slow events.
+2. **Webhook URL** → `<Function URL>webhook` → **Verify**.
+3. **LINE Login channel → your LIFF app → Endpoint URL** → `<Function URL>liff/`.
+4. Test in LINE: `/status` in the 1:1 chat, open the dashboard from the rich menu,
+   send a slip in a bound group (the receipt card should show its image).
+5. Once happy, **stop/delete the Railway service** so only one scheduler exists.
+   (Running both for a day is harmless — every push is deduped in `job_runs` — but
+   there's no reason to keep paying.)
 
-After this the cloudflared tunnel and the local dev server are no longer needed for
-production.
-
----
-
-## Which Supabase project? (decide before step 3)
-
-The bot has been running against your current (dev) Supabase project. Two options:
-
-- **Reuse the same project** — simplest; your existing leases/invoices carry over.
-  But if you *also* leave the dev server running, two schedulers point at one DB. Pushes
-  are still safe (the `job_runs` table dedupes every reminder/digest/summary), but to
-  avoid confusion, **stop the local dev server** once Railway is live.
-- **Separate prod project** (what `.env.example` recommends) — clean isolation. Create a
-  new Supabase project, run **both** migrations in its SQL editor
-  (`supabase/migrations/0001_init.sql` then `0002_job_runs.sql`), and start fresh
-  (you'd re-add leases via the LIFF form).
-
-For a first cutover, reusing the current project + stopping the dev server is the least
-work.
+**Rollback:** point the webhook + LIFF endpoint back at the Railway domain. The
+`Dockerfile` and `railway.json` stay in the repo for that reason; delete them once
+Lambda has run cleanly for a while.
 
 ---
 
-## Verifying the deploy
-- Railway **Deploy Logs** should show `listening on :<port> (production)` and
-  `[cron] scheduler started (Asia/Bangkok): …`.
-- `https://<name>.up.railway.app/health` → `{"status":"ok","env":"production"}`.
-- In LINE: DM the bot `/status` (should reply), and open `/dashboard`.
+## How it differs from the always-on server
+- **Webhook:** events are processed before the 200 is returned (see step 5.1).
+  The first message after idle pays a ~1 s cold start; replies still use the free
+  reply token.
+- **Cron:** no per-minute tick. EventBridge invokes the function at 00:15 and 09:10
+  Bangkok time and it runs every job whose time has passed. Jobs are idempotent and
+  every LINE push is claimed in `job_runs`, so re-runs never double-send. A failed
+  run throws, and Lambda's async retry re-invokes it (twice, a few minutes apart);
+  the admin also gets the usual error DM.
+- **Error-alert cooldown** is per container, so a repeating fault can DM slightly
+  more often than once per 10 minutes.
+- The daily cron also keeps a free-tier Supabase project from auto-pausing.
+
+## Verifying / debugging
+- `<Function URL>health` → `{"status":"ok","env":"production"}`.
+- Logs: CloudWatch → Log groups → `/aws/lambda/line-rental-bot`
+  (`[event] …`, `[slip] …`, `[cron] … ok`).
+- Run the cron by hand: Lambda console → Test → event `{"source":"line-rental-bot.cron"}`.
+- Smoke-test the bundle locally without AWS: `npm run build:lambda`, then
+  `require('./lambda-dist/index.js').handler(<Function-URL-style event>, {})`.
 
 ## Notes
-- **Migrations are not automatic.** Applying `.sql` files to Supabase is a manual step in
-  the Supabase SQL editor (both `0001` and `0002` are already applied to your current
-  project). Any future migration must be run there before/with the deploy that needs it.
-- **Cron runs in-process**, so it only fires while the service is up. On Railway that's
-  24/7. The daily 09:00 digest is skipped for any day the service was down at that minute;
-  invoice generation (00:05) and the monthly summary self-heal via catch-up windows.
-- Cost: a single always-on instance is roughly $5/month on Railway's usage-based plan.
+- **Migrations are not automatic.** Apply new `supabase/migrations/*.sql` files in the
+  Supabase SQL editor before/with the deploy that needs them.
+- Env vars live in the stack parameters (GitHub secrets → `sam deploy`). Editing them
+  in the Lambda console works but is overwritten by the next deploy.
+- To tear everything down: CloudFormation → stack `line-rental-bot` → Delete.

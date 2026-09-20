@@ -24,7 +24,7 @@ const schema = z.object({
   LINE_LOGIN_CHANNEL_ID: z.string().optional(),
   LIFF_ID: z.string().optional(),
 
-  // Public HTTPS origin of this server (e.g. https://xxx.up.railway.app), no
+  // Public HTTPS origin of this server (e.g. the Lambda Function URL), no
   // trailing slash. Used to build absolute URLs for LINE Flex images, which
   // must be publicly reachable. Unset → slip replies fall back to plain text.
   PUBLIC_BASE_URL: z
@@ -47,7 +47,11 @@ const schema = z.object({
   ANTHROPIC_SLIP_MODEL: z.string().default('claude-haiku-4-5'),
 });
 
-const parsed = schema.safeParse(process.env);
+// Treat empty values as unset: CloudFormation passes every optional parameter
+// left blank as "" (template.yaml), which would otherwise fail e.g. `.url()`.
+const env = Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== ''));
+
+const parsed = schema.safeParse(env);
 if (!parsed.success) {
   const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
   // Fail fast and loud — a half-configured webhook silently drops every event.

@@ -14,8 +14,10 @@ import {
 import type { Landlord } from './db/types';
 
 // ─────────────────────────────────────────────────────────────
-// Phase 5 — in-process cron on Thai wall-clock time. Ticks every
-// minute; a job fires the first tick at/after its target time.
+// Phase 5 — cron on Thai wall-clock time. A job fires on the first
+// tick at/after its target time. Ticks come from an in-process
+// timer (startScheduler — local dev / Docker) or from EventBridge
+// invoking the Lambda (runScheduledJobs — production).
 // Job-level dedupe is in-memory and marked only on SUCCESS, so a
 // failed job retries next tick and a restart re-runs at most one
 // idempotent pass; every actual LINE push is additionally deduped
@@ -98,9 +100,11 @@ const JOBS: Job[] = [
 
 const done = new Set<string>(); // job-level "ran today" marks (success only)
 
-async function tick(): Promise<void> {
+/** Runs every job that is due; returns the names of the ones that failed. */
+async function tick(): Promise<string[]> {
   const today = bangkokToday();
   const time = bangkokTime();
+  const failed: string[] = [];
   for (const job of JOBS) {
     const key = `${job.name}:${today}`;
     if (time < job.at || done.has(key)) continue;
@@ -109,14 +113,31 @@ async function tick(): Promise<void> {
       done.add(key);
       console.log(`[cron] ${job.name} ok (${today})`);
     } catch (err) {
-      console.error(`[cron] ${job.name} failed — will retry next tick`, err);
-      void notifyError(`cron:${job.name}`, err);
+      console.error(`[cron] ${job.name} failed — will retry`, err);
+      await notifyError(`cron:${job.name}`, err);
+      failed.push(job.name);
     }
   }
   // keep the set from growing forever
   if (done.size > 100) {
     for (const k of done) if (!k.endsWith(today)) done.delete(k);
   }
+  return failed;
+}
+
+/**
+ * One-shot entry for an external scheduler (EventBridge → Lambda, see
+ * template.yaml). Invoked a few times a day instead of every minute; each call
+ * runs whatever is due. The in-memory `done` set is usually empty here (fresh
+ * container), which is fine: jobs are idempotent and every push is claimed in
+ * job_runs. Throws if any job failed so Lambda's async retry re-invokes us.
+ */
+export async function runScheduledJobs(): Promise<void> {
+  if (!(await jobRunsTableExists())) {
+    throw new Error('[cron] job_runs table missing — apply supabase/migrations/0002_job_runs.sql');
+  }
+  const failed = await tick();
+  if (failed.length > 0) throw new Error(`[cron] failed jobs: ${failed.join(', ')}`);
 }
 
 export async function startScheduler(): Promise<void> {

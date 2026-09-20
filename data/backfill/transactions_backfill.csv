@@ -1,0 +1,10 @@
+﻿property_name,date,direction,category,amount,rent_month,note
+เกษมสันต์ 1,16/7/2026,in,rent,23000,7,ค่าเช่าเดือน 7/26 — นายทรงศักดิ์ (ครบกำหนด 21 ก.ค.)
+เกษมสันต์ 1,21/8/2026,in,rent,23000,8,ค่าเช่าเดือน 8/26 — นายทรงศักดิ์ (ครบกำหนด 21 ส.ค.)
+เกษมสันต์ 1,,in,rent,23000,9,ค่าเช่าเดือน 9/26 — นายทรงศักดิ์ (ครบกำหนด 21 ก.ย.)
+The Esse Sukhumvit 36,14/8/2026,in,deposit,84000,,ค่ามัดจำ 2 เดือน
+The Esse Sukhumvit 36,14/8/2026,in,rent,42000,9,ค่าเช่าเดือน 9/26 — นาย Matsumoto (ครบกำหนด 7 ก.ย.)
+The Esse Sukhumvit 36,14/8/2026,in,rent,23032,8,ค่าเช่าเดือน 8/26 ครึ่งเดือนหลัง — นาย Matsumoto
+The Esse Sukhumvit 36,27/8/2026,out,agency,42000,,ค่านายหน้า Yoshida
+The Esse Sukhumvit 36,27/8/2026,out,deposit,20000,,คืนค่าจอง
+The Esse Asoke,1/9/2026,out,utilities,20,,ค่าน้ำค้างชำระ 3 เดือน

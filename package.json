@@ -13,7 +13,8 @@
     "db:push": "supabase db push",
     "richmenu:image": "tsx scripts/richmenu-image.ts",
     "richmenu:setup": "tsx scripts/setup-richmenu.ts",
-    "cards:image": "tsx scripts/setup-cards.ts"
+    "cards:image": "tsx scripts/setup-cards.ts",
+    "backfill:import": "tsx scripts/import-backfill.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

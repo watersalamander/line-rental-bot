@@ -1,8 +1,7 @@
 name: CI
 
-# Typecheck + build on every push and PR. Railway auto-deploys on push to main,
-# so enable "Wait for CI" in the Railway service settings to make a red check
-# here block the deploy (otherwise this is advisory only).
+# Typecheck + build on every push and PR. Deploying is a separate workflow
+# (deploy.yml → AWS Lambda), which runs its own typecheck before shipping.
 on:
   push:
     branches: [main]
@@ -28,3 +27,6 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Build Lambda bundle
+        run: npm run build:lambda

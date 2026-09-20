@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  LINE rental bot — one Lambda behind a public Function URL (LINE webhook, LIFF
+  pages, /api) plus two EventBridge schedules that run the daily cron jobs.
+  Everything here sits inside AWS's always-free tier at family-bot traffic.
+  Deployed by .github/workflows/deploy.yml; see DEPLOY.md.
+
+Parameters:
+  LineChannelSecret: { Type: String, NoEcho: true }
+  LineChannelAccessToken: { Type: String, NoEcho: true }
+  SupabaseUrl: { Type: String }
+  SupabaseServiceRoleKey: { Type: String, NoEcho: true }
+  AnthropicApiKey: { Type: String, NoEcho: true, Default: '' }
+  EasyslipToken: { Type: String, NoEcho: true, Default: '' }
+  SlipVendor: { Type: String, Default: claude, AllowedValues: [claude, easyslip] }
+  LineLoginChannelId: { Type: String, Default: '' }
+  LiffId: { Type: String, Default: '' }
+  AdminLineUserId: { Type: String, Default: '' }
+  # The Function URL itself (stack output "FunctionUrl", no trailing slash).
+  # Unknown until the first deploy, so: deploy once, copy the output into the
+  # PUBLIC_BASE_URL GitHub variable, deploy again. Blank → Flex cards fall back
+  # to plain text.
+  PublicBaseUrl: { Type: String, Default: '' }
+
+Resources:
+  BotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: line-rental-bot
+      Description: LINE rental bot (webhook + LIFF + cron)
+      CodeUri: lambda-dist/ # built by `npm run build:lambda`
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      # Memory also scales CPU: 1 GB keeps the cold start around a second.
+      MemorySize: 1024
+      # Webhook events are processed BEFORE the ack (src/routes/webhook.ts), so
+      # this must cover a cold start + a Claude Vision slip read.
+      Timeout: 60
+      LoggingConfig:
+        LogGroup: !Ref BotLogGroup
+      Environment:
+        Variables:
+          NODE_ENV: production
+          NODE_OPTIONS: --enable-source-maps
+          LINE_CHANNEL_SECRET: !Ref LineChannelSecret
+          LINE_CHANNEL_ACCESS_TOKEN: !Ref LineChannelAccessToken
+          SUPABASE_URL: !Ref SupabaseUrl
+          SUPABASE_SERVICE_ROLE_KEY: !Ref SupabaseServiceRoleKey
+          ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+          EASYSLIP_TOKEN: !Ref EasyslipToken
+          SLIP_VENDOR: !Ref SlipVendor
+          LINE_LOGIN_CHANNEL_ID: !Ref LineLoginChannelId
+          LIFF_ID: !Ref LiffId
+          ADMIN_LINE_USER_ID: !Ref AdminLineUserId
+          PUBLIC_BASE_URL: !Ref PublicBaseUrl
+      # Public HTTPS endpoint. Auth is the app's job: LINE signature on
+      # /webhook, LIFF id_token on /api.
+      FunctionUrlConfig:
+        AuthType: NONE
+      Events:
+        # src/scheduler.ts runs every job whose 'HH:mm' target has passed, so
+        # each schedule just needs to fire shortly AFTER the jobs it is for.
+        # Failed runs throw → Lambda's built-in async retry re-invokes (2x).
+        NightlyJobs: # invoice_gen@00:05, mark_overdue@00:10
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(15 0 * * ? *)
+            ScheduleExpressionTimezone: Asia/Bangkok
+            Input: '{"source":"line-rental-bot.cron"}'
+        MorningJobs: # reminder_digest@09:00, monthly_summary@09:05
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(10 9 * * ? *)
+            ScheduleExpressionTimezone: Asia/Bangkok
+            Input: '{"source":"line-rental-bot.cron"}'
+
+  BotLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/line-rental-bot
+      RetentionInDays: 30
+
+Outputs:
+  FunctionUrl:
+    Description: Public base URL — use for the LINE webhook (+ /webhook), the LIFF endpoint (+ /liff/) and PUBLIC_BASE_URL (without the trailing slash).
+    Value: !GetAtt BotFunctionUrl.FunctionUrl

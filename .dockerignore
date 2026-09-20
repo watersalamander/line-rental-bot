@@ -21,3 +21,5 @@ README.md
 DEPLOY.md
 supabase/.branches
 supabase/.temp
+lambda-dist
+.aws-sam

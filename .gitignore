@@ -18,3 +18,7 @@ supabase/.temp/
 Thumbs.db
 .vscode/
 .idea/
+
+# AWS Lambda build artifact / SAM working dir
+lambda-dist/
+.aws-sam/

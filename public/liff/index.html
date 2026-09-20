@@ -136,13 +136,19 @@
         $('boot').classList.add('hidden');
         $('app').classList.remove('hidden');
       } catch (e) {
-        $('boot').textContent = 'ตั้งค่าผิดพลาด: ' + (e && e.message ? e.message : e);
+        const msg = e && e.message ? e.message : e;
+        $('boot').textContent = e && e.denied ? msg : 'ตั้งค่าผิดพลาด: ' + msg;
       }
     }
 
     async function loadProperties() {
       const res = await fetch('/api/properties', { headers: { Authorization: 'Bearer ' + idToken } });
-      if (!res.ok) throw new Error('โหลดรายการห้องไม่สำเร็จ (' + res.status + ')');
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const err = new Error((body && body.error) || 'โหลดรายการห้องไม่สำเร็จ (' + res.status + ')');
+        err.denied = res.status === 401 || res.status === 403; // not a linked family member
+        throw err;
+      }
       const { properties } = await res.json();
       const sel = $('propertySelect');
       for (const p of properties) {

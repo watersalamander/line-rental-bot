@@ -2,15 +2,16 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config';
 import { verifyIdToken } from '../liff/verify';
-import { getLandlordByLineUserId, listUnlinkedLandlords, upsertLandlord } from '../services/landlords';
+import { getLandlordByLineUserId } from '../services/landlords';
 import { createLease, listProperties } from '../services/leases';
 import { getHomeOverview, getPropertyDetail } from '../services/views';
 
 // Authenticate a LIFF request via `Authorization: Bearer <id_token>`.
 // Throws AuthError (→ 401) on any problem, NeedsLinkError (→ 403) when the
-// LINE account is unknown but unlinked family rows exist — creating a fresh
-// profile then would duplicate an imported family member, so the user must
-// pick their name in the bot's 1:1 chat first (linkHandler).
+// LINE account has no landlord row. LIFF never creates profiles: the LIFF URL
+// is reachable by any LINE user once the Login channel is published, so every
+// newcomer must go through the bot's invite-gated 1:1 chat (linkHandler),
+// which links them to their family row or creates a fresh profile.
 class AuthError extends Error {}
 class NeedsLinkError extends Error {}
 
@@ -30,13 +31,9 @@ async function authLandlord(request: FastifyRequest): Promise<{ landlordId: stri
   const existing = await getLandlordByLineUserId(verified.userId);
   if (existing) return { landlordId: existing.id };
 
-  if ((await listUnlinkedLandlords()).length > 0) {
-    throw new NeedsLinkError(
-      'ยังไม่ได้ผูกบัญชี LINE กับรายชื่อครอบครัว — ทักแชทส่วนตัวกับบอท แล้วแตะเลือกชื่อของคุณก่อนครับ',
-    );
-  }
-  const landlord = await upsertLandlord(verified.userId, verified.name);
-  return { landlordId: landlord.id };
+  throw new NeedsLinkError(
+    'ยังไม่ได้ผูกบัญชี LINE กับรายชื่อครอบครัว — ทักแชทส่วนตัวกับบอท แล้วแตะเลือกชื่อของคุณก่อนครับ',
+  );
 }
 
 /** Shared auth wrapper: sends the right error response, or returns the landlord id. */

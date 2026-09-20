@@ -175,8 +175,14 @@
       const res = await fetch(path, { headers: { Authorization: 'Bearer ' + idToken } });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error((body && body.error) || 'โหลดข้อมูลไม่สำเร็จ (' + res.status + ')');
+        const err = new Error((body && body.error) || 'โหลดข้อมูลไม่สำเร็จ (' + res.status + ')');
+        err.denied = res.status === 401 || res.status === 403; // not a linked family member
+        throw err;
       }
+      // First successful call proves access — only now reveal the page chrome,
+      // so an unlinked visitor never sees the header or the pool card.
+      $('boot').classList.add('hidden');
+      $('app').classList.remove('hidden');
       return res.json();
     }
 
@@ -417,9 +423,7 @@
         if (!liff.isLoggedIn()) { liff.login(); return; }
         idToken = liff.getIDToken();
         if (!idToken) throw new Error('ไม่พบ ID token — ตรวจสอบว่า LIFF scope มี “openid” หรือไม่');
-        $('boot').classList.add('hidden');
-        $('app').classList.remove('hidden');
-        route();
+        route(); // #app stays hidden until api() confirms access
       } catch (e) {
         $('boot').textContent = 'ตั้งค่าผิดพลาด: ' + (e && e.message ? e.message : e);
       }
@@ -428,6 +432,13 @@
     function showErr(e) {
       $('homeStatus').classList.add('hidden');
       $('propStatus').classList.add('hidden');
+      if (e && e.denied) {
+        // No access: blank page with just the server's Thai explanation.
+        $('app').classList.add('hidden');
+        $('boot').textContent = e.message;
+        $('boot').classList.remove('hidden');
+        return;
+      }
       alert(e && e.message ? e.message : e);
     }
 
